@@ -1,0 +1,12 @@
+[package]
+name = "verrev-transport"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+verrev-crypto = { workspace = true }
+verrev-identity = { workspace = true }
+verrev-syscall = { workspace = true }
+verrev-hash = { workspace = true }
+

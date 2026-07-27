@@ -1,0 +1,13 @@
+[package]
+name = "verrev-name"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+verrev-mesh = { workspace = true }
+verrev-identity = { workspace = true }
+verrev-crypto = { workspace = true }
+verrev-hash = { workspace = true }
+verrev-syscall = { workspace = true }
+

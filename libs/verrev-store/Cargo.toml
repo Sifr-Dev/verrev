@@ -1,0 +1,9 @@
+[package]
+name = "verrev-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+verrev-hash = { workspace = true }
+verrev-crypto = { workspace = true }

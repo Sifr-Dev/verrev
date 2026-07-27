@@ -1,0 +1,11 @@
+target/
+zig-cache/
+zig-out/
+*.o
+*.wasm
+*.nexus
+.env
+*.swp
+*.swo
+*.log
+.DS_Store

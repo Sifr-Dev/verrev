@@ -1,0 +1,91 @@
+[workspace]
+resolver = "2"
+members = [
+    # Layer 0 — Foundation
+    "libs/verrev-syscall",
+    "libs/verrev-hash",
+    # Layer 1 — Core Primitives
+    "libs/verrev-crypto",
+    "libs/verrev-identity",
+    "libs/verrev-capability",
+    # Layer 2 — Local Storage
+    "libs/verrev-store",
+    "libs/verrev-fs",
+    # Layer 3 — Transport
+    "libs/verrev-transport",
+    "libs/verrev-relay",
+    # Layer 4 — Mesh Network
+    "libs/verrev-p2p",
+    "libs/verrev-mesh",
+    "libs/verrev-name",
+    # Layer 5 — State & Replication
+    "libs/verrev-sync",
+    "libs/verrev-diststore",
+    # Layer 6 — Compute
+    "libs/verrev-runtime",
+    "libs/verrev-compute",
+    "libs/verrev-db",
+    # Layer 7 — Interface
+    "libs/verrev-ui",
+    # Test Infrastructure
+    "libs/verrev-net",
+    # Applications
+    "apps/messenger",
+    "apps/fileshare",
+    "apps/shell",
+    "apps/host",
+    "apps/compute-node",
+    "apps/vault",
+    "apps/social",
+    "apps/media",
+    "apps/search",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+# Layer 0
+verrev-syscall = { path = "libs/verrev-syscall" }
+verrev-hash = { path = "libs/verrev-hash" }
+# Layer 1
+verrev-crypto = { path = "libs/verrev-crypto" }
+verrev-identity = { path = "libs/verrev-identity" }
+verrev-capability = { path = "libs/verrev-capability" }
+# Layer 2
+verrev-store = { path = "libs/verrev-store" }
+verrev-fs = { path = "libs/verrev-fs" }
+# Layer 3
+verrev-transport = { path = "libs/verrev-transport" }
+verrev-relay = { path = "libs/verrev-relay" }
+# Layer 4
+verrev-p2p = { path = "libs/verrev-p2p" }
+verrev-mesh = { path = "libs/verrev-mesh" }
+verrev-name = { path = "libs/verrev-name" }
+# Layer 5
+verrev-sync = { path = "libs/verrev-sync" }
+verrev-diststore = { path = "libs/verrev-diststore" }
+# Layer 6
+verrev-runtime = { path = "libs/verrev-runtime" }
+verrev-compute = { path = "libs/verrev-compute" }
+verrev-db = { path = "libs/verrev-db" }
+# Layer 7
+verrev-ui = { path = "libs/verrev-ui" }
+# Test Infrastructure
+verrev-net = { path = "libs/verrev-net" }
+
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+opt-level = 3
+debug = false
+panic = "abort"
+strip = "symbols"
+
+[profile.dev]
+debug = true
+opt-level = 0
+panic = "unwind"

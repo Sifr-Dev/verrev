@@ -1,0 +1,11 @@
+[package]
+name = "verrev-mesh"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+verrev-p2p = { workspace = true }
+verrev-relay = { workspace = true }
+verrev-identity = { workspace = true }
+verrev-crypto = { workspace = true }

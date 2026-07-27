@@ -1,0 +1,8 @@
+[target.x86_64-unknown-none]
+runner = "qemu-system-x86_64 -m 512M -cpu max -machine q35 -serial stdio -display gtk -device isa-debug-exit -kernel"
+
+[target.riscv64gc-unknown-none-elf]
+runner = "qemu-system-riscv64 -m 512M -machine virt -serial stdio -display none -bios default -kernel"
+
+[build]
+rustflags = []

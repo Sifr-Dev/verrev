@@ -1,0 +1,9 @@
+[package]
+name = "verrev-syscall"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["linux"]
+linux = []

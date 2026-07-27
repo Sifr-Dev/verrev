@@ -1,0 +1,10 @@
+[package]
+name = "verrev-search"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+verrev-mesh = { workspace = true }
+verrev-diststore = { workspace = true }
+verrev-ui = { workspace = true }

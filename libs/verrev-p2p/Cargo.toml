@@ -1,0 +1,12 @@
+[package]
+name = "verrev-p2p"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+verrev-crypto = { workspace = true }
+verrev-identity = { workspace = true }
+verrev-transport = { workspace = true }
+verrev-hash = { workspace = true }
+

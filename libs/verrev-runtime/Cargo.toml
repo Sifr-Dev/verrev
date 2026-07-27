@@ -1,0 +1,11 @@
+[package]
+name = "verrev-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+verrev-crypto = { workspace = true }
+verrev-capability = { workspace = true }
+verrev-hash = { workspace = true }
+

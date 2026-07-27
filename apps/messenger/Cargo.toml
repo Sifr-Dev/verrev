@@ -1,0 +1,16 @@
+[package]
+name = "verrev-messenger"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+verrev-hash = { workspace = true }
+verrev-crypto = { workspace = true }
+verrev-identity = { workspace = true }
+verrev-transport = { workspace = true }
+verrev-p2p = { workspace = true }
+verrev-mesh = { workspace = true }
+verrev-sync = { workspace = true }
+verrev-store = { workspace = true }
+verrev-ui = { workspace = true }

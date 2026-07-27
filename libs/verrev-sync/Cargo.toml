@@ -1,0 +1,10 @@
+[package]
+name = "verrev-sync"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+verrev-hash = { workspace = true }
+verrev-identity = { workspace = true }
+verrev-transport = { workspace = true }

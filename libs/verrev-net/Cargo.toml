@@ -1,0 +1,13 @@
+[package]
+name = "verrev-net"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+verrev-transport = { workspace = true }
+verrev-p2p = { workspace = true }
+verrev-mesh = { workspace = true }
+verrev-sync = { workspace = true }

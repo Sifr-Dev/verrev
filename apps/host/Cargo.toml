@@ -1,0 +1,12 @@
+[package]
+name = "verrev-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+verrev-fs = { workspace = true }
+verrev-diststore = { workspace = true }
+verrev-mesh = { workspace = true }
+verrev-name = { workspace = true }
+verrev-ui = { workspace = true }

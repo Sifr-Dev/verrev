@@ -1,0 +1,12 @@
+[package]
+name = "verrev-relay"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+verrev-transport = { workspace = true }
+verrev-identity = { workspace = true }
+verrev-hash = { workspace = true }
+verrev-syscall = { workspace = true }
+

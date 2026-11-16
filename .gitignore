@@ -9,3 +9,10 @@ zig-out/
 *.swo
 *.log
 .DS_Store
+.opencode
+agents.md
+plan.md
+rules.md
+opencode.json
+PLAN.md
+.cargo

@@ -1,14 +1,27 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/banner-dark.svg">
+    <img alt="verrev — built from zero" src=".github/banner-light.svg" width="100%">
+  </picture>
+</p>
+
 # Verrev
 
-> The Verrev Project is building a vertically-integrated peer-to-peer operating system and network — from the kernel up, every line is owned code. No compromises, no refactors, no external dependencies beyond Rust + LLVM. Post-quantum cryptography, capability security, CRDT-based state, and distributed compute form the foundation. The same code that compiles today on Linux compiles unmodified on the Verrev microkernel in Phase 4.
-
-**Reference documents:** [`PLAN.md`](PLAN.md) (full 1000-line technical specification), [`rules.md`](rules.md) (19 engineering rules, including Rule 19: Absolute Perfection and Rule 20: No Rushing), [`AGENTS.md`](AGENTS.md) (agent context with full audit + remediation plan).
+> An in-development peer-to-peer operating system written from scratch in Rust:
+> post-quantum crypto (ML-KEM-1024 / ML-DSA-87), capability security, CRDTs,
+> content-addressed storage. The same crates compile on Linux today; a
+> Verrev-microkernel target is the long-term plan.
+>
+> **This is a prototype in an early phase, not a working system.** No network
+> transport exists yet (`verrev-transport` is a shell), the store does not
+> return objects, and the apps under `apps/` are stubs. What works today is
+> documented and verified below — nothing beyond it is claimed.
 
 ---
 
 ## Current State
 
-`cargo build` — 0 errors. `cargo test -- --test-threads=1` — 31 tests pass.
+`cargo build --workspace` — exit 0 (warnings: unused deps `verrev-db`, `verrev-net`, unused imports/variables in stub crates). `cargo test --workspace` — **48 tests pass** across 7 crates (hash KAT + crypto suites + identity + capability + diststore + relay + fs). The commit message said "60 tests" and elsewhere "31 tests" — the measured number is 48; treat any higher figure as stale.
 
 ### Layer 0 — Foundation
 
@@ -156,3 +169,13 @@ No circular dependencies. Each layer depends only on layers below it.
 6. Implement real transport handshake (pure PQ 2-RTT)
 7. Build working Kademlia find_closest, Merkle tree root_hash/diff
 8. End-to-end encrypted messaging
+
+## verified (2026-11-17, this machine)
+
+- `cargo build --workspace` → exit 0 (warnings: unused workspace deps; no errors)
+- `cargo test --workspace` → **48 passed** (0 failed). Breakdown: verrev-crypto 27, verrev-hash 6+2, verrev-identity 10, verrev-capability 1, verrev-diststore 1, verrev-fs 1, doc-tests 0
+- `rust-toolchain.toml` pins `nightly-2026-07-01` with `rust-src`, `rustfmt`, `clippy`, `llvm-tools`
+
+## license
+
+`MIT` — see `LICENSE`. built from zero.

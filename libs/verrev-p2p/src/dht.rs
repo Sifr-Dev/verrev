@@ -68,6 +68,10 @@ impl RoutingTable {
         self.buckets.iter().map(|b| b.entries.len()).sum()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.buckets.iter().all(|bucket| bucket.entries.is_empty())
+    }
+
     pub fn bucket_len(&self, idx: usize) -> usize {
         self.buckets.get(idx).map(|b| b.entries.len()).unwrap_or(0)
     }
@@ -162,7 +166,7 @@ mod tests {
         }
         let closest = rt.find_closest(&local, K);
         assert!(closest.len() <= K);
-        assert!(closest.len() > 0);
+        assert!(!closest.is_empty());
     }
 
     #[test]
@@ -172,6 +176,6 @@ mod tests {
         for i in 0..100 {
             rt.insert(PeerInfo { identity: make_id(i as u8 + 1), addrs: Vec::new(), distance: [0u8; 32] });
         }
-        assert!(rt.len() > 0);
+        assert!(!rt.is_empty());
     }
 }

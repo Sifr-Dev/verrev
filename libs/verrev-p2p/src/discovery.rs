@@ -10,6 +10,10 @@ impl Discovery {
         Discovery { port }
     }
 
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+
     pub fn start(&mut self) -> Result<()> {
         Ok(())
     }

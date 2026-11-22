@@ -187,7 +187,7 @@ fn power2round(a0: &mut i32, a: i32) -> i32 {
 fn decompose(a0: &mut i32, a: i32) -> i32 {
     let mut a1 = (a.wrapping_add(127)) >> 7;
     a1 = (a1.wrapping_mul((1 << 30) / GAMMA2).wrapping_add(1 << 23)) >> 24;
-    a1 &= ((Q - 1) / ALPHA - 1) as i32;
+    a1 &= (Q - 1) / ALPHA - 1;
     *a0 = a.wrapping_sub(a1.wrapping_mul(ALPHA));
     let t = ((Q - 1) / 2).wrapping_sub(*a0) >> 31;
     *a0 = (*a0).wrapping_sub(t & Q);
@@ -195,7 +195,7 @@ fn decompose(a0: &mut i32, a: i32) -> i32 {
 }
 
 fn make_hint(a0: i32, a1: i32) -> usize {
-    if a0 > GAMMA2 || a0 < -GAMMA2 || (a0 == -GAMMA2 && a1 != 0) {
+    if !(-GAMMA2..=GAMMA2).contains(&a0) || (a0 == -GAMMA2 && a1 != 0) {
         1
     } else {
         0
@@ -208,7 +208,7 @@ fn use_hint(a: i32, hint: usize) -> i32 {
     if hint == 0 {
         return a1;
     }
-    let w1_max = ((Q - 1) / ALPHA - 1) as i32;
+    let w1_max = (Q - 1) / ALPHA - 1;
     if a0 > 0 {
         (a1 + 1) & w1_max
     } else {
@@ -372,7 +372,7 @@ fn polyt0_pack(a: &[i32; N]) -> [u8; POLYT0_PACKEDBYTES] {
     for i in 0..N / 8 {
         let mut t = [0u32; 8];
         for j in 0..8 {
-            t[j] = ((1 << (D - 1)) as i32 - a[8 * i + j]) as u32;
+            t[j] = ((1 << (D - 1)) - a[8 * i + j]) as u32;
         }
         r[13 * i] = t[0] as u8;
         r[13 * i + 1] = (t[0] >> 8) as u8 | ((t[1] as u8) << 5);
@@ -404,7 +404,7 @@ fn polyt0_unpack(buf: &[u8]) -> [i32; N] {
         r[8 * i + 6] = ((a[9] as i32 >> 6) | (a[10] as i32) << 2 | (a[11] as i32) << 10) & 0x1FFF;
         r[8 * i + 7] = ((a[11] as i32 >> 3) | (a[12] as i32) << 5) & 0x1FFF;
         for j in 0..8 {
-            r[8 * i + j] = (1 << (D - 1)) as i32 - r[8 * i + j];
+            r[8 * i + j] = (1 << (D - 1)) - r[8 * i + j];
         }
     }
     r
@@ -427,7 +427,7 @@ fn polyeta_pack(a: &[i32; N]) -> [u8; POLYETA_PACKEDBYTES] {
 fn polyeta_unpack(buf: &[u8]) -> [i32; N] {
     let mut r = [0i32; N];
     for i in 0..N / 8 {
-        r[8 * i] = (buf[3 * i] >> 0) as i32 & 7;
+        r[8 * i] = buf[3 * i] as i32 & 7;
         r[8 * i + 1] = (buf[3 * i] >> 3) as i32 & 7;
         r[8 * i + 2] = ((buf[3 * i] >> 6) as i32 | ((buf[3 * i + 1] as i32) << 2)) & 7;
         r[8 * i + 3] = (buf[3 * i + 1] >> 1) as i32 & 7;
@@ -832,7 +832,7 @@ pub fn generate_keypair(seed: Option<&[u8; 64]>) -> DilithiumKeypair {
     let s1 = polyvecl_uniform_eta(&rhoprime, 0);
     let s2 = polyveck_uniform_eta(&rhoprime, L as u16);
 
-    let mut s1hat = s1.clone();
+    let mut s1hat = s1;
     polyvecl_ntt(&mut s1hat, &zetas);
 
     let mut t1 = [[0i32; N]; K];
@@ -1245,7 +1245,7 @@ mod tests {
                 if w1_vfy[i][j] != captured_w1_high[i][j] && !found_bad {
                     let mut a0 = 0i32;
                     let hb = decompose(&mut a0, w1_copy[i][j]);
-                    assert!(false,
+                    assert_eq!(w1_vfy[i][j], captured_w1_high[i][j],
                         "w1 mismatch: post={} target={} hint={} raw_hb={} raw_w1={} expected={}",
                         w1_vfy[i][j], captured_w1_high[i][j], h_vec[i][j], hb, w1_copy[i][j], w1_expected[i][j]);
                     found_bad = true;

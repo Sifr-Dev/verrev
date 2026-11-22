@@ -53,11 +53,10 @@ impl Endpoint {
                     self.connections.insert(conn_id, new_conn);
                 }
                 
-                if let Some(conn) = self.connections.get_mut(&conn_id) {
-                    if conn.handle_packet(data).is_ok() {
+                if let Some(conn) = self.connections.get_mut(&conn_id)
+                    && conn.handle_packet(data).is_ok() {
                         // After handling, it might have new packets to send back
                     }
-                }
                 
                 self.flush_connection(conn_id, &peer_ip, peer_port)?;
             }

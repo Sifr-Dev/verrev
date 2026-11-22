@@ -124,10 +124,22 @@ impl Poly1305Ctx {
     fn new(key: &[u8; 32]) -> Self {
         let mut r = [0u64; 5];
         r[0] = (u32::from_le_bytes([key[0], key[1], key[2], key[3]]) & 0x03FFFFFF) as u64;
-        r[1] = ((u32::from_le_bytes([key[3], key[4], key[5], key[6]]) >> 2) & 0x03FFFFFF) as u64;
-        r[2] = ((u32::from_le_bytes([key[6], key[7], key[8], key[9]]) >> 4) & 0x03FFFFFF) as u64;
-        r[3] = ((u32::from_le_bytes([key[9], key[10], key[11], key[12]]) >> 6) & 0x03FFFFFF) as u64;
-        r[4] = ((u32::from_le_bytes([key[12], key[13], key[14], key[15]]) >> 4) & 0x03FFFFFF) as u64;
+        r[1] = ((u32::from_le_bytes([key[3], key[4], key[5], key[6]]) >> 2) & 0x03FFFF03) as u64;
+        let mut clamped = [0u8; 16];
+        clamped.copy_from_slice(&key[..16]);
+        clamped[3] &= 15;
+        clamped[7] &= 15;
+        clamped[11] &= 15;
+        clamped[15] &= 15;
+        clamped[4] &= 252;
+        clamped[8] &= 252;
+        clamped[12] &= 252;
+        let clamped = u128::from_le_bytes(clamped);
+        r[0] = clamped as u64 & 0x03FFFFFF;
+        r[1] = (clamped >> 26) as u64 & 0x03FFFFFF;
+        r[2] = (clamped >> 52) as u64 & 0x03FFFFFF;
+        r[3] = (clamped >> 78) as u64 & 0x03FFFFFF;
+        r[4] = (clamped >> 104) as u64;
         Poly1305Ctx { r, h: [0u64; 5], buf: [0u8; 16], buf_len: 0, key: *key }
     }
 
@@ -216,8 +228,33 @@ impl Poly1305Ctx {
         self.h[0] = self.h[0].wrapping_add(c4 * 5);
     }
 
+    #[cfg(test)]
+    fn tap_update(mut self, data: &[u8]) -> [u8; 16] {
+        self.update(data);
+        self.finalize()
+    }
+
     fn finalize(mut self) -> [u8; 16] {
         self.pad();
+        self.propagate();
+
+        // Select the canonical representative modulo 2^130 - 5 before
+        // serializing the low 128 bits.
+        let mut g = [0u64; 5];
+        g[0] = self.h[0] + 5;
+        let mut carry = g[0] >> 26;
+        g[0] &= 0x03FFFFFF;
+        for i in 1..5 {
+            g[i] = self.h[i] + carry;
+            carry = g[i] >> 26;
+            g[i] &= 0x03FFFFFF;
+        }
+        g[4] = g[4].wrapping_sub(1 << 26);
+        let use_g = (g[4] >> 63).wrapping_sub(1);
+        for i in 0..5 {
+            self.h[i] = (self.h[i] & !use_g) | (g[i] & use_g);
+        }
+
         let s = u128::from_le_bytes([
             self.key[16], self.key[17], self.key[18], self.key[19],
             self.key[20], self.key[21], self.key[22], self.key[23],
@@ -455,6 +492,11 @@ fn aes256_encrypt_block(block: &[u8; 16], rk: &[u8; 240]) -> [u8; 16] {
 
 const GHASH_R: u128 = 0xE1000000000000000000000000000000;
 
+// table[i] = i * H in GF(2^128), using the SP 800-38D bit ordering: the
+// multiplicand's bits are consumed most-significant first and the running
+// value is reduced by shifting right into R = 0xE1 << 120.
+// gfmul128_4bit consumes one nibble at a time and applies exactly four of
+// those shifts between table lookups, so the table must cover four steps.
 fn ghash_precompute(h: u128) -> [u128; 16] {
     let mut table = [0u128; 16];
     let mut i = 0usize;
@@ -476,10 +518,17 @@ fn ghash_precompute(h: u128) -> [u128; 16] {
 }
 
 fn gfmul128_4bit(x: u128, table: &[u128; 16]) -> u128 {
+    // Horner form of Z = sum_n alpha^(4n) * table[nibble_n], where nibble 0 is
+    // the MOST significant nibble of x and alpha is the SP 800-38D shift.
+    // Evaluation therefore starts at the LEAST significant nibble and works
+    // upwards: each step applies four reductions to the accumulated value and
+    // then xors in the next table entry. Consuming nibbles most-significant
+    // first instead computes a different product, which is invisible to
+    // encrypt/decrypt round-trip tests and only shows up against known answers.
     let mut z = 0u128;
     let mut i = 0;
     while i < 128 {
-        let nibble = ((x >> (124 - i)) & 0xF) as usize;
+        let nibble = ((x >> i) & 0xF) as usize;
         let mut j = 0;
         while j < 4 {
             let lsb = z & 1;
@@ -496,26 +545,53 @@ fn gfmul128_4bit(x: u128, table: &[u128; 16]) -> u128 {
 struct GhashCtx {
     table: [u128; 16],
     y: u128,
+    buf: [u8; 16],
+    buf_len: usize,
 }
 
 impl GhashCtx {
     fn new(h: u128) -> Self {
-        GhashCtx { table: ghash_precompute(h), y: 0 }
+        GhashCtx {
+            table: ghash_precompute(h),
+            y: 0,
+            buf: [0u8; 16],
+            buf_len: 0,
+        }
     }
 
     fn update(&mut self, data: &[u8]) {
         let mut offset = 0usize;
-        while offset < data.len() {
-            let chunk_end = (offset + 16).min(data.len());
-            let chunk = &data[offset..chunk_end];
-            let mut block = [0u8; 16];
-            block[..chunk.len()].copy_from_slice(chunk);
-            self.y = gfmul128_4bit(self.y ^ u128::from_be_bytes(block), &self.table);
-            offset = chunk_end;
+        if self.buf_len > 0 {
+            let take = (16 - self.buf_len).min(data.len());
+            self.buf[self.buf_len..self.buf_len + take].copy_from_slice(&data[..take]);
+            self.buf_len += take;
+            offset += take;
+            if self.buf_len == 16 {
+                self.accumulate();
+                self.buf_len = 0;
+            }
+        }
+        while offset + 16 <= data.len() {
+            self.buf.copy_from_slice(&data[offset..offset + 16]);
+            self.accumulate();
+            offset += 16;
+        }
+        if offset < data.len() {
+            let remaining = data.len() - offset;
+            self.buf[..remaining].copy_from_slice(&data[offset..]);
+            self.buf_len = remaining;
         }
     }
 
-    fn finalize(self) -> u128 {
+    fn accumulate(&mut self) {
+        self.y = gfmul128_4bit(self.y ^ u128::from_be_bytes(self.buf), &self.table);
+    }
+
+    fn finalize(mut self) -> u128 {
+        if self.buf_len > 0 {
+            self.buf[self.buf_len..].fill(0);
+            self.accumulate();
+        }
         self.y
     }
 }
@@ -534,6 +610,12 @@ impl Aes256Gcm {
     fn encrypt_ctr(&self, counter_block: &[u8; 16], plaintext: &[u8], ciphertext: &mut [u8]) {
         let rk = aes256_key_expansion(&self.key);
         let mut ctr = *counter_block;
+        for byte in ctr.iter_mut().rev() {
+            *byte = byte.wrapping_add(1);
+            if *byte != 0 {
+                break;
+            }
+        }
         let mut pos = 0usize;
         while pos < plaintext.len() {
             let ks = aes256_encrypt_block(&ctr, &rk);
@@ -564,8 +646,12 @@ impl Aes256Gcm {
         ctx.update(&[0u8; 16][..aad_pad]);
         ctx.update(&ciphertext[..plaintext.len()]);
         ctx.update(&[0u8; 16][..ct_pad]);
-        ctx.update(&(aad.len() as u64).to_be_bytes());
-        ctx.update(&(plaintext.len() as u64).to_be_bytes());
+        // SP 800-38D step 6: the final GHASH block is [len(A)]64 || [len(C)]64
+        // with both lengths encoded in BITS, not bytes. Using byte lengths
+        // leaves the empty-message known answer correct and corrupts every
+        // other tag, which is precisely the blind spot of round-trip tests.
+        ctx.update(&(aad.len() as u64).wrapping_mul(8).to_be_bytes());
+        ctx.update(&(plaintext.len() as u64).wrapping_mul(8).to_be_bytes());
         let s = ctx.finalize();
 
         let e = u128::from_be_bytes(aes256_encrypt_block(&j0, &rk));
@@ -588,8 +674,8 @@ impl Aes256Gcm {
         ctx.update(&[0u8; 16][..aad_pad]);
         ctx.update(ciphertext);
         ctx.update(&[0u8; 16][..ct_pad]);
-        ctx.update(&(aad.len() as u64).to_be_bytes());
-        ctx.update(&(ciphertext.len() as u64).to_be_bytes());
+        ctx.update(&(aad.len() as u64).wrapping_mul(8).to_be_bytes());
+        ctx.update(&(ciphertext.len() as u64).wrapping_mul(8).to_be_bytes());
         let s = ctx.finalize();
 
         let e = u128::from_be_bytes(aes256_encrypt_block(&j0, &rk));
@@ -606,6 +692,39 @@ impl Aes256Gcm {
 
 #[cfg(test)]
 mod tests {
+    // Straight-from-the-spec GF(2^128) reference: SP 800-38D Algorithm 1.
+    // Used as a differential oracle for the table-driven fast path.
+    fn gfmul_reference(x: u128, y: u128) -> u128 {
+        let mut z = 0u128;
+        let mut v = x;
+        for i in 0..128 {
+            if (y >> (127 - i)) & 1 != 0 {
+                z ^= v;
+            }
+            v = if v & 1 != 0 { (v >> 1) ^ GHASH_R } else { v >> 1 };
+        }
+        z
+    }
+
+    #[test]
+    fn gfmul_fast_path_matches_spec_reference() {
+        let mut seed = 0x243f6a8885a308d313198a2e03707344u128;
+        for _ in 0..4096 {
+            seed = seed.wrapping_mul(6364136223846793005u128).wrapping_add(1442695040888963407u128);
+            let x = seed ^ (seed >> 37);
+            seed = seed.wrapping_mul(6364136223846793005u128).wrapping_add(1442695040888963407u128);
+            let y = seed ^ (seed >> 61);
+            let table = ghash_precompute(x);
+            assert_eq!(gfmul128_4bit(y, &table), gfmul_reference(x, y), "x={x:032x} y={y:032x}");
+        }
+        // Degenerate operands catch reduction and endianness errors that a
+        // purely random sweep can statistically miss.
+        for &x in &[0u128, 1, u128::MAX, 1 << 127] {
+            for &y in &[0u128, 1, u128::MAX, 1 << 127] {
+                assert_eq!(gfmul128_4bit(y, &ghash_precompute(x)), gfmul_reference(x, y));
+            }
+        }
+    }
     use super::*;
 
     #[test]
@@ -637,6 +756,184 @@ mod tests {
             0xAD, 0x48, 0xA2, 0x14, 0x92, 0x84, 0x20, 0x87,
         ];
         assert_eq!(ct, expected, "AES-256 KAT mismatch");
+    }
+
+    #[test]
+    fn rfc8439_poly1305_known_answer() {
+        let key = [
+            0x85, 0xd6, 0xbe, 0x78, 0x57, 0x55, 0x6d, 0x33,
+            0x7f, 0x44, 0x52, 0xfe, 0x42, 0xd5, 0x06, 0xa8,
+            0x01, 0x03, 0x80, 0x8a, 0xfb, 0x0d, 0xb2, 0xfd,
+            0x4a, 0xbf, 0xf6, 0xaf, 0x41, 0x49, 0xf5, 0x1b,
+        ];
+        let tag = Poly1305Ctx::new(&key)
+            .tap_update(b"Cryptographic Forum Research Group");
+        assert_eq!(
+            tag,
+            [
+                0xa8, 0x06, 0x1d, 0xc1, 0x30, 0x51, 0x36, 0xc6,
+                0xc2, 0x2b, 0x8b, 0xaf, 0x0c, 0x01, 0x27, 0xa9,
+            ]
+        );
+    }
+
+    #[test]
+    fn ietf_xchacha20poly1305_a1_known_answer() {
+        // draft-irtf-cfrg-xchacha-03, Appendix A.1 / A.3.1:
+        // https://www.ietf.org/archive/id/draft-irtf-cfrg-xchacha-03.txt
+        let mut key = [0u8; 32];
+        let mut nonce = [0u8; 24];
+        for (index, byte) in key.iter_mut().enumerate() {
+            *byte = 0x80 + index as u8;
+        }
+        for (index, byte) in nonce.iter_mut().enumerate() {
+            *byte = 0x40 + index as u8;
+        }
+        let aad = [
+            0x50, 0x51, 0x52, 0x53, 0xc0, 0xc1, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7,
+        ];
+        let plaintext = b"Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it.";
+        let expected_ciphertext = [
+            0xbd, 0x6d, 0x17, 0x9d, 0x3e, 0x83, 0xd4, 0x3b,
+            0x95, 0x76, 0x57, 0x94, 0x93, 0xc0, 0xe9, 0x39,
+            0x57, 0x2a, 0x17, 0x00, 0x25, 0x2b, 0xfa, 0xcc,
+            0xbe, 0xd2, 0x90, 0x2c, 0x21, 0x39, 0x6c, 0xbb,
+            0x73, 0x1c, 0x7f, 0x1b, 0x0b, 0x4a, 0xa6, 0x44,
+            0x0b, 0xf3, 0xa8, 0x2f, 0x4e, 0xda, 0x7e, 0x39,
+            0xae, 0x64, 0xc6, 0x70, 0x8c, 0x54, 0xc2, 0x16,
+            0xcb, 0x96, 0xb7, 0x2e, 0x12, 0x13, 0xb4, 0x52,
+            0x2f, 0x8c, 0x9b, 0xa4, 0x0d, 0xb5, 0xd9, 0x45,
+            0xb1, 0x1b, 0x69, 0xb9, 0x82, 0xc1, 0xbb, 0x9e,
+            0x3f, 0x3f, 0xac, 0x2b, 0xc3, 0x69, 0x48, 0x8f,
+            0x76, 0xb2, 0x38, 0x35, 0x65, 0xd3, 0xff, 0xf9,
+            0x21, 0xf9, 0x66, 0x4c, 0x97, 0x63, 0x7d, 0xa9,
+            0x76, 0x88, 0x12, 0xf6, 0x15, 0xc6, 0x8b, 0x13,
+            0xb5, 0x2e,
+        ];
+        let expected_tag = [
+            0xc0, 0x87, 0x59, 0x24, 0xc1, 0xc7, 0x98, 0x79,
+            0x47, 0xde, 0xaf, 0xd8, 0x78, 0x0a, 0xcf, 0x49,
+        ];
+        let mut ciphertext = [0u8; 114];
+        let mut decrypted = [0u8; 114];
+        let aead = XChaCha20Poly1305::new(&key);
+
+        let mut tag = aead.encrypt(&nonce, &aad, plaintext, &mut ciphertext);
+        assert_eq!(ciphertext, expected_ciphertext);
+        assert_eq!(tag, expected_tag);
+        assert!(aead.decrypt(&nonce, &aad, &ciphertext, &tag, &mut decrypted));
+        assert_eq!(&decrypted, plaintext);
+
+        tag[0] ^= 1;
+        decrypted.fill(0);
+        assert!(!aead.decrypt(&nonce, &aad, &ciphertext, &tag, &mut decrypted));
+    }
+
+    #[test]
+    fn nist_gcm_aes256_empty_and_single_block_known_answers() {
+        // NIST GCMVS gcmEncryptExtIV256.rsp cases 1 and 2; specification:
+        // https://doi.org/10.6028/NIST.SP.800-38D
+        let aead = Aes256Gcm::new(&[0u8; 32]);
+        let nonce = [0u8; 12];
+        let mut empty_ciphertext = [];
+        let empty_tag = aead.encrypt(&nonce, &[], &[], &mut empty_ciphertext);
+        assert_eq!(
+            empty_tag,
+            [
+                0x53, 0x0f, 0x8a, 0xfb, 0xc7, 0x45, 0x36, 0xb9,
+                0xa9, 0x63, 0xb4, 0xf1, 0xc4, 0xcb, 0x73, 0x8b,
+            ]
+        );
+        let mut empty_plaintext = [];
+        assert!(aead.decrypt(&nonce, &[], &[], &empty_tag, &mut empty_plaintext));
+
+        let plaintext = [0u8; 16];
+        let mut ciphertext = [0u8; 16];
+        let tag = aead.encrypt(&nonce, &[], &plaintext, &mut ciphertext);
+        assert_eq!(
+            ciphertext,
+            [
+                0xce, 0xa7, 0x40, 0x3d, 0x4d, 0x60, 0x6b, 0x6e,
+                0x07, 0x4e, 0xc5, 0xd3, 0xba, 0xf3, 0x9d, 0x18,
+            ]
+        );
+        assert_eq!(
+            tag,
+            [
+                0xd0, 0xd1, 0xc8, 0xa7, 0x99, 0x99, 0x6b, 0xf0,
+                0x26, 0x5b, 0x98, 0xb5, 0xd4, 0x8a, 0xb9, 0x19,
+            ]
+        );
+        let mut decrypted = [0u8; 16];
+        assert!(aead.decrypt(&nonce, &[], &ciphertext, &tag, &mut decrypted));
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn aes256gcm_matches_independent_openssl_vectors() {
+        for (index, v) in crate::gcm_vectors::VECTORS.iter().enumerate() {
+            let aead = Aes256Gcm::new(&v.key);
+            let mut ciphertext = alloc::vec![0u8; v.plaintext.len()];
+            let tag = aead.encrypt(&v.nonce, v.aad, v.plaintext, &mut ciphertext);
+            assert_eq!(ciphertext.as_slice(), v.ciphertext, "ciphertext, vector {index}");
+            assert_eq!(tag, v.tag, "tag, vector {index}");
+
+            let mut plaintext = alloc::vec![0u8; v.plaintext.len()];
+            assert!(aead.decrypt(&v.nonce, v.aad, &ciphertext, &tag, &mut plaintext),
+                    "decrypt, vector {index}");
+            assert_eq!(plaintext.as_slice(), v.plaintext, "plaintext, vector {index}");
+
+            // Authentication must fail when the tag or the body is altered.
+            let mut bad_tag = tag;
+            bad_tag[index % 16] ^= 1;
+            assert!(!aead.decrypt(&v.nonce, v.aad, &ciphertext, &bad_tag, &mut plaintext));
+            if !ciphertext.is_empty() {
+                let mut bad_ciphertext = ciphertext.clone();
+                bad_ciphertext[0] ^= 1;
+                assert!(!aead.decrypt(&v.nonce, v.aad, &bad_ciphertext, &tag, &mut plaintext));
+            }
+            if !v.aad.is_empty() {
+                let mut bad_aad = v.aad.to_vec();
+                bad_aad[0] ^= 1;
+                assert!(!aead.decrypt(&v.nonce, &bad_aad, &ciphertext, &tag, &mut plaintext));
+            }
+        }
+    }
+
+    #[test]
+    fn ghash_incremental_updates_equal_single_shot() {
+        // AAD/ciphertext are fed through a buffering layer; split points must
+        // not change the result, otherwise a partial final block is lost.
+        // The byte stream is built exactly as Aes256Gcm::encrypt builds it,
+        // including the zero padding and the bit-length trailer.
+        let key = [7u8; 32];
+        let nonce = [9u8; 12];
+        let aad: alloc::vec::Vec<u8> = (0..37u8).collect();
+        let plaintext: alloc::vec::Vec<u8> = (0..91u8).map(|b| b.wrapping_mul(3)).collect();
+        let aead = Aes256Gcm::new(&key);
+        let mut whole = alloc::vec![0u8; plaintext.len()];
+        let expected = aead.encrypt(&nonce, &aad, &plaintext, &mut whole);
+
+        let mut stream = aad.clone();
+        stream.resize(48, 0);
+        stream.extend_from_slice(&whole);
+        stream.resize(48 + 96, 0);
+        stream.extend_from_slice(&(aad.len() as u64 * 8).to_be_bytes());
+        stream.extend_from_slice(&(plaintext.len() as u64 * 8).to_be_bytes());
+
+        let rk = aes256_key_expansion(&key);
+        let mut j0 = [0u8; 16];
+        j0[..12].copy_from_slice(&nonce);
+        j0[15] = 1;
+        let h = u128::from_be_bytes(aes256_encrypt_block(&[0u8; 16], &rk));
+        let e = u128::from_be_bytes(aes256_encrypt_block(&j0, &rk));
+        for split in 0..=stream.len() {
+            let mut ctx = GhashCtx::new(h);
+            ctx.update(&stream[..split]);
+            ctx.update(&stream[split..]);
+            let s = ctx.finalize();
+            assert_eq!((s ^ e).to_be_bytes(), expected, "split {split}");
+        }
     }
 
     #[test]

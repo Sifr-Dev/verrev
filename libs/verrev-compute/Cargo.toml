@@ -6,8 +6,6 @@ license.workspace = true
 
 [dependencies]
 verrev-runtime = { workspace = true }
-verrev-mesh = { workspace = true }
-verrev-diststore = { workspace = true }
 verrev-identity = { workspace = true }
 verrev-capability = { workspace = true }
 verrev-hash = { workspace = true }

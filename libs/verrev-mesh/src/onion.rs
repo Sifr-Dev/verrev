@@ -15,9 +15,9 @@ impl OnionPacket {
         let mut current_payload = payload.to_vec();
         
         // Traverse backwards: from destination to first hop
-        for (i, hop) in route.iter().rev().enumerate() {
+        for (i, _hop) in route.iter().rev().enumerate() {
             let key = &keys[keys.len() - 1 - i];
-            let mut cipher = XChaCha20Poly1305::new(key);
+            let cipher = XChaCha20Poly1305::new(key);
             
             // For the destination (i=0 in rev), next_hop is all zeros.
             // For intermediate hops, next_hop is the previous one we processed.
@@ -102,7 +102,7 @@ mod tests {
         let r2 = make_identity(2);
         let r3 = make_identity(3); // destination
         
-        let route = alloc::vec![r1.clone(), r2.clone(), r3.clone()];
+        let route = alloc::vec![r1, r2, r3];
         
         let key1 = [1u8; 32];
         let key2 = [2u8; 32];

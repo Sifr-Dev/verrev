@@ -41,3 +41,9 @@ impl DistributedStore {
         Err(DistStoreError::RepairFailed)
     }
 }
+
+impl Default for DistributedStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}

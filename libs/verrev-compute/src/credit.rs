@@ -1,5 +1,4 @@
 use alloc::collections::BTreeSet;
-use verrev_capability::Capability;
 use verrev_identity::Identity;
 
 pub struct CreditCapability {
@@ -33,5 +32,11 @@ impl CreditLedger {
 
     pub fn mark_spent(&mut self, serial: [u8; 32]) {
         self.spent.insert(serial);
+    }
+}
+
+impl Default for CreditLedger {
+    fn default() -> Self {
+        Self::new()
     }
 }

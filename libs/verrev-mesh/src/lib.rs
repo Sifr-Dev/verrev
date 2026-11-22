@@ -3,7 +3,6 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use verrev_crypto::aead::XChaCha20Poly1305;
 use verrev_identity::Identity;
 
 pub mod routing;
@@ -37,6 +36,18 @@ impl MeshNode {
             routing_table: routing::RoutingTable::new(),
             circuits: Vec::new(),
         }
+    }
+
+    pub fn identity(&self) -> Identity {
+        self.identity
+    }
+
+    pub fn routing_table(&self) -> &routing::RoutingTable {
+        &self.routing_table
+    }
+
+    pub fn circuit_count(&self) -> usize {
+        self.circuits.len()
     }
 
     pub fn route_message(&self, target: &Identity, data: &[u8]) -> Result<Vec<u8>> {

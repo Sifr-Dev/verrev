@@ -13,16 +13,18 @@ pub struct Handshake {
     session_key: Option<[u8; 32]>,
 }
 
+struct ClientWait {
+    kyber_sk: [u8; kyber::SECRET_KEY_BYTES],
+    kyber_pk: [u8; kyber::PUBLIC_KEY_BYTES],
+}
+
 enum HandshakeState {
     /// Client: send Kyber PK + Dilithium PK + Sig
     ClientHello,
     /// Server: Wait for ClientHello, then respond with Kyber CT + Dilithium PK + Sig
     ServerWait,
     /// Client: Wait for ServerResponse
-    ClientWait {
-        kyber_sk: [u8; kyber::SECRET_KEY_BYTES],
-        kyber_pk: [u8; kyber::PUBLIC_KEY_BYTES],
-    },
+    ClientWait(alloc::boxed::Box<ClientWait>),
     /// Both: Established
     Established,
 }
@@ -57,7 +59,10 @@ impl Handshake {
                 msg.extend_from_slice(&self.local_identity.public_key);
                 msg.extend_from_slice(&sig);
 
-                self.state = HandshakeState::ClientWait { kyber_sk, kyber_pk };
+                self.state = HandshakeState::ClientWait(alloc::boxed::Box::new(ClientWait {
+                    kyber_sk,
+                    kyber_pk,
+                }));
                 Some(msg)
             }
             _ => None,
@@ -109,7 +114,8 @@ impl Handshake {
                 self.state = HandshakeState::Established;
                 Ok(Some(out_msg))
             }
-            HandshakeState::ClientWait { kyber_sk, kyber_pk } => {
+            HandshakeState::ClientWait(wait) => {
+                let ClientWait { kyber_sk, kyber_pk } = wait.as_ref();
                 let mut ct = [0u8; kyber::CIPHERTEXT_BYTES];
                 ct.copy_from_slice(&msg[..kyber::CIPHERTEXT_BYTES]);
 

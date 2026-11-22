@@ -70,12 +70,11 @@ impl UdpSocket {
             Err(_) => return Err(TransportError::ConnectionLost),
         };
 
-        if let Some((addr_buf, len)) = src {
-            if len as usize == core::mem::size_of::<SockaddrIn6>() {
+        if let Some((addr_buf, len)) = src
+            && len as usize == core::mem::size_of::<SockaddrIn6>() {
                 let addr = unsafe { &*(addr_buf.as_ptr() as *const SockaddrIn6) };
                 return Ok((size, addr.sin6_addr, u16::from_be(addr.sin6_port)));
             }
-        }
         
         // If we get here, it wasn't a valid IPv6 sockaddr, maybe it was IPv4.
         // For Phase 1 we only parse IPv6.

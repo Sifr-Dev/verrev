@@ -24,3 +24,9 @@ impl KvStore {
         Ok(())
     }
 }
+
+impl Default for KvStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}

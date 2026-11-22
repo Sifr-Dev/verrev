@@ -5,7 +5,7 @@ use crate::TransportError;
 use crate::handshake::Handshake;
 use crate::channel::EncryptedChannel;
 use crate::crypto_stream::CryptoStream;
-use crate::packet::{PacketHeader, Frame, decode_frames, encode_frame, PACKET_HEADER_SIZE};
+use crate::packet::{PacketHeader, Frame, decode_frames, encode_frame};
 
 #[derive(Debug, PartialEq)]
 pub enum ConnectionState {
@@ -74,6 +74,10 @@ impl Connection {
             send_queue: alloc::vec::Vec::new(),
             recv_queue: alloc::vec::Vec::new(),
         }
+    }
+
+    pub fn is_initiator(&self) -> bool {
+        self.is_initiator
     }
 
     pub fn send_message(&mut self, msg: &[u8]) -> Result<()> {

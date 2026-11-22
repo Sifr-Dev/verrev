@@ -6,8 +6,6 @@ license.workspace = true
 
 [dependencies]
 verrev-store = { workspace = true }
-verrev-sync = { workspace = true }
-verrev-mesh = { workspace = true }
 verrev-identity = { workspace = true }
 verrev-crypto = { workspace = true }
 verrev-hash = { workspace = true }

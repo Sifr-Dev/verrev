@@ -34,6 +34,13 @@ impl Directory {
         self.entries.iter().find(|e| e.name.as_slice() == name).map(|e| e.hash)
     }
 
+    pub fn is_directory(&self, name: &[u8]) -> Option<bool> {
+        self.entries
+            .iter()
+            .find(|entry| entry.name.as_slice() == name)
+            .map(|entry| entry.is_directory)
+    }
+
     pub fn add_entry(&mut self, name: &[u8], hash: [u8; 32], is_directory: bool) -> Result<()> {
         if self.entries.iter().any(|e| e.name.as_slice() == name) {
             return Err(FsError::AlreadyExists);
@@ -44,5 +51,11 @@ impl Directory {
             is_directory,
         });
         Ok(())
+    }
+}
+
+impl Default for Directory {
+    fn default() -> Self {
+        Self::new()
     }
 }

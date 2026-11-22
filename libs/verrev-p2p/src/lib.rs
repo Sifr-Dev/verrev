@@ -4,7 +4,6 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use verrev_identity::Identity;
-use verrev_transport::connection::Connection;
 use verrev_transport::PeerAddr;
 
 pub mod dht;
@@ -53,9 +52,13 @@ impl P2PNode {
         })
     }
 
+    pub fn identity(&self) -> Identity {
+        self.identity_bundle.identity
+    }
+
     pub fn bootstrap(&mut self, seeds: &[PeerAddr]) -> Result<()> {
         for seed in seeds {
-            if let Ok(conn_id) = self.endpoint.connect(seed.ip, seed.port) {
+            if let Ok(_conn_id) = self.endpoint.connect(seed.ip, seed.port) {
                 // Connection initiated. We must poll to complete the handshake.
             }
         }
@@ -96,8 +99,8 @@ impl P2PNode {
         // Note: iter_mut is not trivial on BTreeMap, so we collect IDs first.
         let conn_ids: Vec<u64> = self.endpoint.connections.keys().copied().collect();
         for id in conn_ids {
-            if let Some(conn) = self.endpoint.connections.get_mut(&id) {
-                if conn.state == verrev_transport::connection::ConnectionState::Established {
+            if let Some(conn) = self.endpoint.connections.get_mut(&id)
+                && conn.state == verrev_transport::connection::ConnectionState::Established {
                     let msgs = conn.receive_messages();
                     for msg in msgs {
                         if let Some(rpc) = rpc::RpcMessage::decode(&msg) {
@@ -105,7 +108,6 @@ impl P2PNode {
                         }
                     }
                 }
-            }
         }
         Ok(())
     }

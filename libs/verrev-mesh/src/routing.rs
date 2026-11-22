@@ -31,3 +31,9 @@ impl RoutingTable {
         self.entries.iter().find(|e| e.target == *target).map(|e| e.next_hop)
     }
 }
+
+impl Default for RoutingTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}

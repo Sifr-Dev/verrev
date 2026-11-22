@@ -4,7 +4,6 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use verrev_identity::Identity;
-use verrev_hash::sha3;
 
 pub const MAX_NAME_LENGTH: usize = 255;
 
@@ -68,5 +67,11 @@ impl NameResolver {
         self.records.insert(alloc::string::String::from(name), record.clone());
         
         Ok(record)
+    }
+}
+
+impl Default for NameResolver {
+    fn default() -> Self {
+        Self::new()
     }
 }

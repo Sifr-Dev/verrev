@@ -5,7 +5,3 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-verrev-sync = { workspace = true }
-verrev-mesh = { workspace = true }
-verrev-diststore = { workspace = true }
-verrev-ui = { workspace = true }

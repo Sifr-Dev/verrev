@@ -5,8 +5,4 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-verrev-store = { workspace = true }
-verrev-fs = { workspace = true }
-verrev-crypto = { workspace = true }
-verrev-identity = { workspace = true }
-verrev-ui = { workspace = true }
+

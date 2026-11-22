@@ -56,25 +56,14 @@ verrev-identity = { path = "libs/verrev-identity" }
 verrev-capability = { path = "libs/verrev-capability" }
 # Layer 2
 verrev-store = { path = "libs/verrev-store" }
-verrev-fs = { path = "libs/verrev-fs" }
 # Layer 3
 verrev-transport = { path = "libs/verrev-transport" }
-verrev-relay = { path = "libs/verrev-relay" }
 # Layer 4
-verrev-p2p = { path = "libs/verrev-p2p" }
-verrev-mesh = { path = "libs/verrev-mesh" }
-verrev-name = { path = "libs/verrev-name" }
 # Layer 5
-verrev-sync = { path = "libs/verrev-sync" }
-verrev-diststore = { path = "libs/verrev-diststore" }
 # Layer 6
 verrev-runtime = { path = "libs/verrev-runtime" }
-verrev-compute = { path = "libs/verrev-compute" }
-verrev-db = { path = "libs/verrev-db" }
 # Layer 7
-verrev-ui = { path = "libs/verrev-ui" }
 # Test Infrastructure
-verrev-net = { path = "libs/verrev-net" }
 
 
 [profile.release]

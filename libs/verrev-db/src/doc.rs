@@ -14,7 +14,7 @@ impl DocumentStore {
 
     pub fn insert(&mut self, collection: &str, doc: &[u8]) -> super::Result<[u8; 32]> {
         let id = sha3::sha3_256(doc);
-        let col = self.collections.entry(collection.into()).or_insert_with(BTreeMap::new);
+        let col = self.collections.entry(collection.into()).or_default();
         if col.contains_key(&id) {
             return Err(super::DbError::Conflict);
         }
@@ -27,5 +27,11 @@ impl DocumentStore {
             .and_then(|col| col.get(id))
             .cloned()
             .ok_or(super::DbError::NotFound)
+    }
+}
+
+impl Default for DocumentStore {
+    fn default() -> Self {
+        Self::new()
     }
 }

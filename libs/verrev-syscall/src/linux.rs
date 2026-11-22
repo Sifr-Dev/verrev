@@ -100,8 +100,8 @@ pub unsafe fn sendto(fd: Fd, buf: &[u8], flags: i32, dest: Option<(*const u8, u3
     }
 }
 
-pub fn recvfrom(fd: Fd, buf: &mut [u8], flags: i32) -> Result<(usize, Option<([u8; SOCKADDR_MAX], u32)>)> {
-    let mut addr: [u8; SOCKADDR_MAX] = [0u8; SOCKADDR_MAX];
+pub fn recvfrom(fd: Fd, buf: &mut [u8], flags: i32) -> Result<RecvFrom> {
+    let mut addr: Sockaddr = [0u8; SOCKADDR_MAX];
     let mut addrlen: u32 = SOCKADDR_MAX as u32;
     let ret = syscall6(
         SYS_RECVFROM,
@@ -149,7 +149,9 @@ pub fn getrandom(buf: &mut [u8]) -> Result<usize> {
 
 pub fn exit(code: i32) -> ! {
     syscall1(SYS_EXIT, code as usize);
-    loop {}
+    loop {
+        core::hint::spin_loop();
+    }
 }
 
 /// Read from a file descriptor.
@@ -195,7 +197,7 @@ pub unsafe fn mmap(addr: *mut u8, length: usize, prot: i32, flags: i32, fd: i32,
         fd as usize,
         offset as usize,
     ) as i64;
-    if ret >= 0 && ret as *mut u8 != core::ptr::null_mut() {
+    if ret >= 0 && !(ret as *mut u8).is_null() {
         Ok(ret as *mut u8)
     } else {
         Err(SyscallError(-ret as i32))

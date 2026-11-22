@@ -19,3 +19,9 @@ impl MessageQueue {
         self.messages.pop_front().ok_or(super::DbError::NotFound)
     }
 }
+
+impl Default for MessageQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}

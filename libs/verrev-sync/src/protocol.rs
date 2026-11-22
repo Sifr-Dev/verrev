@@ -34,7 +34,11 @@ impl SyncSession {
         }
     }
 
-    pub fn reconcile(&mut self, remote: &SyncMessage) -> Result<Option<SyncMessage>> {
+    pub fn state(&self) -> ([u8; HASH_SIZE], [u8; HASH_SIZE], u64) {
+        (self.state_hash, self.remote_hash, self.version)
+    }
+
+    pub fn reconcile(&mut self, _remote: &SyncMessage) -> Result<Option<SyncMessage>> {
         Ok(None)
     }
 }

@@ -1,5 +1,5 @@
 fn rc(t: usize) -> u64 {
-    if t % 255 == 0 {
+    if t.is_multiple_of(255) {
         return 1;
     }
     let mut r: u64 = 0x01;
@@ -15,14 +15,14 @@ fn rc(t: usize) -> u64 {
 
 fn rc_constants() -> [u64; 24] {
     let mut rcs = [0u64; 24];
-    for ir in 0..24 {
+    for (ir, round_constant) in rcs.iter_mut().enumerate() {
         let mut val = 0u64;
         for j in 0..7 {
             if rc(j + 7 * ir) != 0 {
                 val ^= 1u64 << ((1u64 << j) - 1);
             }
         }
-        rcs[ir] = val;
+        *round_constant = val;
     }
     rcs
 }
@@ -79,7 +79,7 @@ impl Keccak {
     fn keccak_f(&mut self) {
         let rc = rc_constants();
         let rho = rho_constants();
-        for round in 0..24 {
+        for round_constant in rc {
             let mut c: [u64; 5] = [0; 5];
             for x in 0..5 {
                 c[x] = self.state[x] ^ self.state[x + 5] ^ self.state[x + 10] ^ self.state[x + 15] ^ self.state[x + 20];
@@ -114,7 +114,7 @@ impl Keccak {
                 self.state = e;
             }
 
-            self.state[0] ^= rc[round];
+            self.state[0] ^= round_constant;
         }
     }
 
@@ -143,11 +143,11 @@ impl Keccak {
     pub fn squeeze(&mut self, out: &mut [u8]) {
         if !self.squeezing {
             if self.output_len > 0 {
-                self.state[self.offset / 8] ^= 0x06u64 << (self.offset % 8) * 8;
+                self.state[self.offset / 8] ^= 0x06u64 << ((self.offset % 8) * 8);
             } else {
-                self.state[self.offset / 8] ^= 0x1fu64 << (self.offset % 8) * 8;
+                self.state[self.offset / 8] ^= 0x1fu64 << ((self.offset % 8) * 8);
             }
-            self.state[(self.rate - 1) / 8] ^= 0x80u64 << ((self.rate - 1) % 8) * 8;
+            self.state[(self.rate - 1) / 8] ^= 0x80u64 << (((self.rate - 1) % 8) * 8);
             self.keccak_f();
             self.squeezing = true;
             self.offset = 0;
@@ -200,6 +200,12 @@ pub fn sha3_512(data: &[u8]) -> [u8; 64] {
     out
 }
 
+pub fn shake128(data: &[u8], out: &mut [u8]) {
+    let mut k = Keccak::shake128();
+    k.absorb(data);
+    k.squeeze(out);
+}
+
 pub fn shake256(data: &[u8], out: &mut [u8]) {
     Keccak::shake(data, out)
 }
@@ -207,6 +213,55 @@ pub fn shake256(data: &[u8], out: &mut [u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // NIST FIPS 202 examples, linked from the NIST example-values page:
+    // https://csrc.nist.gov/projects/cryptographic-standards-and-guidelines/example-values
+    // SHA3-512_Msg0.pdf, SHAKE128_Msg0.pdf, and SHAKE256_Msg0.pdf.
+    const SHA3_512_EMPTY: [u8; 64] = [
+        0xa6, 0x9f, 0x73, 0xcc, 0xa2, 0x3a, 0x9a, 0xc5,
+        0xc8, 0xb5, 0x67, 0xdc, 0x18, 0x5a, 0x75, 0x6e,
+        0x97, 0xc9, 0x82, 0x16, 0x4f, 0xe2, 0x58, 0x59,
+        0xe0, 0xd1, 0xdc, 0xc1, 0x47, 0x5c, 0x80, 0xa6,
+        0x15, 0xb2, 0x12, 0x3a, 0xf1, 0xf5, 0xf9, 0x4c,
+        0x11, 0xe3, 0xe9, 0x40, 0x2c, 0x3a, 0xc5, 0x58,
+        0xf5, 0x00, 0x19, 0x9d, 0x95, 0xb6, 0xd3, 0xe3,
+        0x01, 0x75, 0x85, 0x86, 0x28, 0x1d, 0xcd, 0x26,
+    ];
+
+    #[test]
+    fn nist_sha3_512_empty() {
+        assert_eq!(sha3_512(b""), SHA3_512_EMPTY);
+    }
+
+    #[test]
+    fn nist_shake128_empty() {
+        let mut output = [0u8; 32];
+        shake128(b"", &mut output);
+        assert_eq!(
+            output,
+            [
+                0x7f, 0x9c, 0x2b, 0xa4, 0xe8, 0x8f, 0x82, 0x7d,
+                0x61, 0x60, 0x45, 0x50, 0x76, 0x05, 0x85, 0x3e,
+                0xd7, 0x3b, 0x80, 0x93, 0xf6, 0xef, 0xbc, 0x88,
+                0xeb, 0x1a, 0x6e, 0xac, 0xfa, 0x66, 0xef, 0x26,
+            ]
+        );
+    }
+
+    #[test]
+    fn nist_shake256_empty() {
+        let mut output = [0u8; 32];
+        shake256(b"", &mut output);
+        assert_eq!(
+            output,
+            [
+                0x46, 0xb9, 0xdd, 0x2b, 0x0b, 0xa8, 0x8d, 0x13,
+                0x23, 0x3b, 0x3f, 0xeb, 0x74, 0x3e, 0xeb, 0x24,
+                0x3f, 0xcd, 0x52, 0xea, 0x62, 0xb8, 0x1b, 0x82,
+                0xb5, 0x0c, 0x27, 0x64, 0x6e, 0xd5, 0x76, 0x2f,
+            ]
+        );
+    }
 
     #[test]
     fn test_sha3_256_empty() {

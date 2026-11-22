@@ -13,7 +13,7 @@ impl NatTraversal {
         NatType::None
     }
 
-    pub fn punch_hole(addr: &super::PeerAddr) -> bool {
+    pub fn punch_hole(_addr: &super::PeerAddr) -> bool {
         false
     }
 }

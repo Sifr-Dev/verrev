@@ -4,13 +4,39 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use verrev_identity::Identity;
-use verrev_transport::connection::Connection;
 
 pub struct RelaySession {
     session_id: [u8; 32],
     source: Identity,
     destination: Identity,
     hop_count: u8,
+}
+
+impl RelaySession {
+    pub fn new(session_id: [u8; 32], source: Identity, destination: Identity) -> Self {
+        Self {
+            session_id,
+            source,
+            destination,
+            hop_count: 0,
+        }
+    }
+
+    pub fn session_id(&self) -> &[u8; 32] {
+        &self.session_id
+    }
+
+    pub fn source(&self) -> &Identity {
+        &self.source
+    }
+
+    pub fn destination(&self) -> &Identity {
+        &self.destination
+    }
+
+    pub fn hop_count(&self) -> u8 {
+        self.hop_count
+    }
 }
 
 pub struct StoreAndForward {
@@ -48,5 +74,11 @@ impl StoreAndForward {
     fn prune(&mut self) {
         let now = verrev_syscall::linux::now_nanos().unwrap_or(0) / 1_000_000_000;
         self.pending.retain(|m| m.expiry > now);
+    }
+}
+
+impl Default for StoreAndForward {
+    fn default() -> Self {
+        Self::new()
     }
 }

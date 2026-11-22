@@ -14,7 +14,13 @@ impl Compositor {
         true
     }
 
-    pub fn present(&mut self, scene: &Scene) {
+    pub fn present(&mut self, _scene: &Scene) {
+    }
+}
+
+impl Default for Compositor {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -33,5 +39,11 @@ pub enum SceneNode {
 impl Scene {
     pub fn new() -> Self {
         Scene { root: SceneNode::Rectangle { rect: Rect::new(0.0, 0.0, 800.0, 600.0), color: [0.1, 0.1, 0.12, 1.0], children: Box::new([]) } }
+    }
+}
+
+impl Default for Scene {
+    fn default() -> Self {
+        Self::new()
     }
 }

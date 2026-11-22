@@ -8,6 +8,10 @@ impl Font {
         Font { data, size }
     }
 
+    pub fn data(&self) -> &[u8] {
+        self.data
+    }
+
     pub fn measure(&self, text: &[char]) -> (f32, f32) {
         // Phase 0: Monospace approximation
         let char_width = self.size * 0.6;

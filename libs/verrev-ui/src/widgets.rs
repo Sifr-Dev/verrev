@@ -31,6 +31,12 @@ impl TextInput {
     }
 }
 
+impl Default for TextInput {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub struct ScrollView {
     pub rect: Rect,
     pub scroll_offset: Point,

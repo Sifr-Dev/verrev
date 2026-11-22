@@ -18,25 +18,12 @@ fn gf_mul(mut a: u8, mut b: u8) -> u8 {
     p
 }
 
-// GF(2^8) inversion
-fn gf_inv(mut a: u8) -> u8 {
-    // a^254
-    let mut res = 1;
-    let mut p = 254;
-    while p > 0 {
-        if p & 1 != 0 { res = gf_mul(res, a); }
-        a = gf_mul(a, a);
-        p >>= 1;
-    }
-    res
-}
-
 pub fn encode(data: &[u8], data_shards: usize, parity_shards: usize) -> Result<Vec<Vec<u8>>> {
     if data_shards == 0 || data.is_empty() {
         return Err(DistStoreError::RepairFailed);
     }
     
-    let chunk_size = (data.len() + data_shards - 1) / data_shards;
+    let chunk_size = data.len().div_ceil(data_shards);
     let mut padded_data = data.to_vec();
     padded_data.resize(chunk_size * data_shards, 0);
     
@@ -48,13 +35,13 @@ pub fn encode(data: &[u8], data_shards: usize, parity_shards: usize) -> Result<V
     // Vandermonde matrix encoding for parity
     for i in 0..parity_shards {
         let mut parity = alloc::vec![0u8; chunk_size];
-        for j in 0..data_shards {
+        for (j, shard) in shards.iter().enumerate().take(data_shards) {
             // coefficient = (j + 1)^(i + 1)
             let mut coef = 1;
             for _ in 0..=i { coef = gf_mul(coef, (j + 1) as u8); }
             
             for k in 0..chunk_size {
-                parity[k] ^= gf_mul(coef, shards[j][k]);
+                parity[k] ^= gf_mul(coef, shard[k]);
             }
         }
         shards.push(parity);
@@ -72,8 +59,8 @@ pub fn decode(shards: &[Vec<u8>], data_shards: usize) -> Result<Vec<u8>> {
     }
     
     let mut result = Vec::new();
-    for i in 0..data_shards {
-        result.extend_from_slice(&shards[i]);
+    for shard in shards.iter().take(data_shards) {
+        result.extend_from_slice(shard);
     }
     Ok(result)
 }

@@ -21,7 +21,7 @@ impl MerkleTree {
         let mut level = 0;
 
         while prev_len > 1 {
-            let parent_count = (prev_len + 1) / 2;
+            let parent_count = prev_len.div_ceil(2);
             let pair_idx = update_idx / 2;
 
             while self.levels.len() <= level {
@@ -62,11 +62,10 @@ impl MerkleTree {
         if self.leaves.len() == 1 {
             return self.leaves[0];
         }
-        if let Some(top) = self.levels.last() {
-            if let Some(&hash) = top.first() {
+        if let Some(top) = self.levels.last()
+            && let Some(&hash) = top.first() {
                 return hash;
             }
-        }
         [0u8; HASH_SIZE]
     }
 
@@ -147,6 +146,12 @@ impl MerkleTree {
                 if a != b { result.push(right); }
             }
         }
+    }
+}
+
+impl Default for MerkleTree {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

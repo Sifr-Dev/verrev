@@ -94,7 +94,7 @@ impl TextCrdt {
         Ok(())
     }
 
-    pub fn delete(&mut self, site: SiteId, pos: usize, ts: LamportTs) -> Result<()> {
+    pub fn delete(&mut self, _site: SiteId, pos: usize, _ts: LamportTs) -> Result<()> {
         let mut visible_count = 0;
         for item in self.items.iter_mut() {
             if !item.is_deleted {
@@ -108,6 +108,12 @@ impl TextCrdt {
             }
         }
         Err(SyncError::InvalidState)
+    }
+
+    pub fn parents(&self, index: usize) -> Option<(Option<&OpId>, Option<&OpId>)> {
+        self.items
+            .get(index)
+            .map(|item| (item.parent_left.as_ref(), item.parent_right.as_ref()))
     }
 
     pub fn get_text(&self) -> Vec<char> {
@@ -130,6 +136,12 @@ impl TextCrdt {
         let mut out = [0u8; HASH_SIZE];
         hasher.squeeze(&mut out);
         out
+    }
+}
+
+impl Default for TextCrdt {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

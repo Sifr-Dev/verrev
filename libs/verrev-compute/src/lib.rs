@@ -47,6 +47,18 @@ impl ComputeNode {
         }
     }
 
+    pub fn identity(&self) -> Identity {
+        self.identity
+    }
+
+    pub fn capabilities(&self) -> &[Capability] {
+        &self.capabilities
+    }
+
+    pub fn jobs_completed(&self) -> u64 {
+        self.jobs_completed
+    }
+
     pub fn execute_job(&mut self, _job: &Job, _module: &WasmModule) -> Result<Vec<u8>> {
         Err(ComputeError::NoAvailableWorker)
     }

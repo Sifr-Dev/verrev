@@ -66,3 +66,9 @@ impl CryptoStream {
         }
     }
 }
+
+impl Default for CryptoStream {
+    fn default() -> Self {
+        Self::new()
+    }
+}

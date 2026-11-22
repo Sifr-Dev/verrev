@@ -5,6 +5,4 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-verrev-runtime = { workspace = true }
-verrev-capability = { workspace = true }
-verrev-ui = { workspace = true }
+

@@ -5,6 +5,8 @@ pub type Gid = u32;
 pub type Size = usize;
 pub type Offset = i64;
 pub type Result<T> = core::result::Result<T, SyscallError>;
+pub type Sockaddr = [u8; 28];
+pub type RecvFrom = (usize, Option<(Sockaddr, u32)>);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SyscallError(pub i32);

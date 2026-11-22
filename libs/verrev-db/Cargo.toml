@@ -5,7 +5,5 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-verrev-compute = { workspace = true }
-verrev-sync = { workspace = true }
 verrev-hash = { workspace = true }
 

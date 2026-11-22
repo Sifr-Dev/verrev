@@ -25,8 +25,8 @@ const QINV: i32 = -3327;
 
 fn montgomery_reduce(a: i32) -> i32 {
     let t = (a as i16).wrapping_mul(QINV as i16) as i32;
-    let r = (a.wrapping_sub(t.wrapping_mul(Q))) >> 16;
-    r
+    
+    (a.wrapping_sub(t.wrapping_mul(Q))) >> 16
 }
 
 fn fqmul(a: i32, b: i32) -> i32 {
@@ -154,7 +154,7 @@ fn poly_tobytes(a: &[i32; N]) -> [u8; POLYBYTES] {
     for i in 0..N / 2 {
         let t0 = a[2 * i].rem_euclid(Q) as u16;
         let t1 = a[2 * i + 1].rem_euclid(Q) as u16;
-        out[j] = (t0 >> 0) as u8;
+        out[j] = t0 as u8;
         out[j + 1] = ((t0 >> 8) | (t1 << 4)) as u8;
         out[j + 2] = (t1 >> 4) as u8;
         j += 3;

@@ -17,6 +17,7 @@ pub enum MeshError {
     NoRoute,
     HopLimitExceeded,
     CircuitBroken,
+    EncryptionFailed,
     DecryptionFailed,
     RelayUnavailable,
 }
@@ -58,7 +59,7 @@ impl MeshNode {
         let route = alloc::vec![*target];
         let keys = alloc::vec![[0u8; 32]];
         
-        let packet = onion::OnionPacket::build(data, &route, &keys);
+        let packet = onion::OnionPacket::build(data, &route, &keys)?;
         Ok(packet.data)
     }
 }

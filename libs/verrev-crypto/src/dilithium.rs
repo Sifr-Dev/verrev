@@ -216,12 +216,11 @@ fn use_hint(a: i32, hint: usize) -> i32 {
     }
 }
 
-fn poly_uniform(seed: &[u8; 32], nonce: u16) -> [i32; N] {
+fn poly_uniform(seed: &[u8; 32], column: u8, row: u8) -> [i32; N] {
     let mut poly = [0i32; N];
     let mut state = Keccak::shake128();
-    let nonce_bytes = nonce.to_le_bytes();
     state.absorb(seed);
-    state.absorb(&nonce_bytes);
+    state.absorb(&[column, row]);
     let mut buf = [0u8; 840];
     state.squeeze(&mut buf);
     let mut ctr = 0usize;
@@ -256,7 +255,7 @@ fn polyvecl_uniform_eta(seed: &[u8; 64], nonce: u16) -> [[i32; N]; L] {
     for i in 0..L {
         let mut h = Keccak::shake256();
         h.absorb(seed);
-        h.absorb(&[(nonce + i as u16) as u8]);
+        h.absorb(&(nonce + i as u16).to_le_bytes());
         let mut buf = [0u8; 136];
         h.squeeze(&mut buf);
         let mut ctr = 0usize;
@@ -289,7 +288,7 @@ fn polyveck_uniform_eta(seed: &[u8; 64], nonce: u16) -> [[i32; N]; K] {
     for i in 0..K {
         let mut h = Keccak::shake256();
         h.absorb(seed);
-        h.absorb(&[(nonce + i as u16) as u8]);
+        h.absorb(&(nonce + i as u16).to_le_bytes());
         let mut buf = [0u8; 136];
         h.squeeze(&mut buf);
         let mut ctr = 0usize;
@@ -324,9 +323,10 @@ fn polyz_unpack(buf: &[u8]) -> [i32; N] {
             | (buf[5 * i + 1] as i32) << 8
             | (buf[5 * i + 2] as i32) << 16;
         r[2 * i] &= 0xFFFFF;
-        r[2 * i + 1] = (buf[5 * i + 2] as i32 >> 4)
+        r[2 * i + 1] = ((buf[5 * i + 2] as i32) >> 4)
             | (buf[5 * i + 3] as i32) << 4
             | (buf[5 * i + 4] as i32) << 12;
+        r[2 * i + 1] &= 0xFFFFF;
         r[2 * i] = GAMMA1 - r[2 * i];
         r[2 * i + 1] = GAMMA1 - r[2 * i + 1];
     }
@@ -615,7 +615,7 @@ fn polyvec_matrix_expand(rho: &[u8; 32]) -> [[[i32; N]; L]; K] {
     let mut mat = [[[0i32; N]; L]; K];
     for i in 0..K {
         for j in 0..L {
-            mat[i][j] = poly_uniform(rho, (i * L + j) as u16);
+            mat[i][j] = poly_uniform(rho, j as u8, i as u8);
         }
     }
     mat
@@ -651,20 +651,15 @@ fn pack_pk(pk: &mut [u8; PUBLIC_KEY_BYTES], rho: &[u8; 32], t1: &[[i32; N]; K]) 
     }
 }
 
-fn pack_sk(sk: &mut [u8; SECRET_KEY_BYTES], rho: &[u8; 32], tr: &[u8; 32], key: &[u8; 32],
+fn pack_sk(sk: &mut [u8; SECRET_KEY_BYTES], rho: &[u8; 32], tr: &[u8; 64], key: &[u8; 32],
            t0: &[[i32; N]; K], s1: &[[i32; N]; L], s2: &[[i32; N]; K]) {
     let mut offset = 0usize;
     sk[offset..offset + 32].copy_from_slice(rho);
     offset += 32;
     sk[offset..offset + 32].copy_from_slice(key);
     offset += 32;
-    sk[offset..offset + 32].copy_from_slice(tr);
-    offset += 32;
-    for i in 0..K {
-        let packed = polyt0_pack(&t0[i]);
-        sk[offset..offset + POLYT0_PACKEDBYTES].copy_from_slice(&packed);
-        offset += POLYT0_PACKEDBYTES;
-    }
+    sk[offset..offset + 64].copy_from_slice(tr);
+    offset += 64;
     for i in 0..L {
         let packed = polyeta_pack(&s1[i]);
         sk[offset..offset + POLYETA_PACKEDBYTES].copy_from_slice(&packed);
@@ -675,7 +670,11 @@ fn pack_sk(sk: &mut [u8; SECRET_KEY_BYTES], rho: &[u8; 32], tr: &[u8; 32], key: 
         sk[offset..offset + POLYETA_PACKEDBYTES].copy_from_slice(&packed);
         offset += POLYETA_PACKEDBYTES;
     }
-    sk[offset..offset + 32].copy_from_slice(tr);
+    for i in 0..K {
+        let packed = polyt0_pack(&t0[i]);
+        sk[offset..offset + POLYT0_PACKEDBYTES].copy_from_slice(&packed);
+        offset += POLYT0_PACKEDBYTES;
+    }
 }
 
 fn pack_sig(sig: &mut [u8; SIGNATURE_BYTES], c: &[u8; CTILDEBYTES], z: &[[i32; N]; L], h: &[[i32; N]; K]) {
@@ -711,7 +710,7 @@ fn unpack_pk(rho: &mut [u8; 32], t1: &mut [[i32; N]; K], pk: &[u8; PUBLIC_KEY_BY
     }
 }
 
-fn unpack_sk(rho: &mut [u8; 32], key: &mut [u8; 32], tr: &mut [u8; 32],
+fn unpack_sk(rho: &mut [u8; 32], key: &mut [u8; 32], tr: &mut [u8; 64],
              t0: &mut [[i32; N]; K], s1: &mut [[i32; N]; L], s2: &mut [[i32; N]; K],
              sk: &[u8; SECRET_KEY_BYTES]) {
     let mut offset = 0usize;
@@ -719,12 +718,8 @@ fn unpack_sk(rho: &mut [u8; 32], key: &mut [u8; 32], tr: &mut [u8; 32],
     offset += 32;
     key.copy_from_slice(&sk[offset..offset + 32]);
     offset += 32;
-    tr.copy_from_slice(&sk[offset..offset + 32]);
-    offset += 32;
-    for i in 0..K {
-        t0[i] = polyt0_unpack(&sk[offset..offset + POLYT0_PACKEDBYTES]);
-        offset += POLYT0_PACKEDBYTES;
-    }
+    tr.copy_from_slice(&sk[offset..offset + 64]);
+    offset += 64;
     for i in 0..L {
         s1[i] = polyeta_unpack(&sk[offset..offset + POLYETA_PACKEDBYTES]);
         offset += POLYETA_PACKEDBYTES;
@@ -732,6 +727,10 @@ fn unpack_sk(rho: &mut [u8; 32], key: &mut [u8; 32], tr: &mut [u8; 32],
     for i in 0..K {
         s2[i] = polyeta_unpack(&sk[offset..offset + POLYETA_PACKEDBYTES]);
         offset += POLYETA_PACKEDBYTES;
+    }
+    for i in 0..K {
+        t0[i] = polyt0_unpack(&sk[offset..offset + POLYT0_PACKEDBYTES]);
+        offset += POLYT0_PACKEDBYTES;
     }
 }
 
@@ -789,42 +788,59 @@ fn polyvecl_uniform_gamma1(seed: &[u8; 64], nonce: u16) -> [[i32; N]; L] {
     v
 }
 
-fn sha3_256(input: &[u8]) -> [u8; 32] {
-    let mut h = Keccak::sha3_256();
-    h.absorb(input);
-    let mut out = [0u8; 32];
-    h.squeeze(&mut out);
-    out
-}
-
 fn shake256(input: &[u8], out: &mut [u8]) {
     let mut h = Keccak::shake256();
     h.absorb(input);
     h.squeeze(out);
 }
 
-pub fn generate_keypair(seed: Option<&[u8; 64]>) -> DilithiumKeypair {
-    let mut seed_buf = [0u8; 64];
-    if let Some(s) = seed {
-        seed_buf.copy_from_slice(s);
-    } else {
-        fill_random(&mut seed_buf);
-    }
+/// FIPS 204 Section 5.2 domain separation prefix: `IntegerToBytes(0,1) || IntegerToBytes(len(ctx),1) || ctx`.
+const MAX_CONTEXT: usize = 255;
 
-    let mut seedbuf = [0u8; 96];
-    seedbuf[..64].copy_from_slice(&seed_buf);
-    seedbuf[64] = K as u8;
-    seedbuf[65] = L as u8;
-    let mut seedbuf_out = [0u8; 96];
+fn absorb_domain_prefix(state: &mut Keccak, context: &[u8]) {
+    state.absorb(&[0u8]);
+    state.absorb(&[(context.len().min(MAX_CONTEXT)) as u8]);
+    state.absorb(&context[..context.len().min(MAX_CONTEXT)]);
+}
+
+fn message_representative(tr: &[u8; 64], context: &[u8], message: &[u8]) -> [u8; 64] {
+    let mut state = Keccak::shake256();
+    state.absorb(tr);
+    absorb_domain_prefix(&mut state, context);
+    state.absorb(message);
+    let mut mu = [0u8; 64];
+    state.squeeze(&mut mu);
+    mu
+}
+
+pub fn generate_keypair(seed: Option<&[u8; 64]>) -> DilithiumKeypair {
+    let mut xi = [0u8; 32];
+    match seed {
+        // FIPS 204 seeds key generation from the 32-byte xi; the remaining bytes
+        // of the legacy 64-byte buffer are ignored.
+        Some(value) => xi.copy_from_slice(&value[..32]),
+        None => {
+            let _ = fill_random(&mut xi);
+        }
+    }
+    keygen_internal(&xi)
+}
+
+fn keygen_internal(xi: &[u8; 32]) -> DilithiumKeypair {
+    // FIPS 204 Algorithm 6: (rho, rho', K) <- H(xi || k || l, 128)
+    let mut seedbuf = [0u8; 34];
+    seedbuf[..32].copy_from_slice(xi);
+    seedbuf[32] = K as u8;
+    seedbuf[33] = L as u8;
+    let mut seedbuf_out = [0u8; 128];
     shake256(&seedbuf, &mut seedbuf_out);
-    let seedbuf = seedbuf_out;
 
     let mut rho = [0u8; 32];
-    rho.copy_from_slice(&seedbuf[..32]);
+    rho.copy_from_slice(&seedbuf_out[..32]);
     let mut rhoprime = [0u8; 64];
-    rhoprime.copy_from_slice(&seedbuf[32..96]);
+    rhoprime.copy_from_slice(&seedbuf_out[32..96]);
     let mut key = [0u8; 32];
-    key.copy_from_slice(&seedbuf[64..96]);
+    key.copy_from_slice(&seedbuf_out[96..128]);
 
     let (zetas, invntt_factor) = zeta_table();
     let mat = polyvec_matrix_expand(&rho);
@@ -849,7 +865,12 @@ pub fn generate_keypair(seed: Option<&[u8; 64]>) -> DilithiumKeypair {
     let mut pk = [0u8; PUBLIC_KEY_BYTES];
     pack_pk(&mut pk, &rho, &t1_high);
 
-    let tr = sha3_256(&pk);
+    let mut tr = [0u8; 64];
+    {
+        let mut h = Keccak::shake256();
+        h.absorb(&pk);
+        h.squeeze(&mut tr);
+    }
 
     let mut sk = [0u8; SECRET_KEY_BYTES];
     pack_sk(&mut sk, &rho, &tr, &key, &t0, &s1, &s2);
@@ -861,35 +882,75 @@ pub fn generate_keypair(seed: Option<&[u8; 64]>) -> DilithiumKeypair {
 }
 
 pub fn sign(sk: &[u8; SECRET_KEY_BYTES], msg: &[u8]) -> [u8; SIGNATURE_BYTES] {
+    sign_with_context(sk, msg, &[])
+}
+
+/// FIPS 204 Algorithm 2 (ML-DSA.Sign) with an explicit context string.
+pub fn sign_with_context(
+    sk: &[u8; SECRET_KEY_BYTES],
+    msg: &[u8],
+    context: &[u8],
+) -> [u8; SIGNATURE_BYTES] {
+    sign_internal(sk, msg, context, true)
+}
+
+/// FIPS 204 hedged signing (Algorithm 7 with fresh `rnd`).
+pub fn sign_hedged(sk: &[u8; SECRET_KEY_BYTES], msg: &[u8]) -> [u8; SIGNATURE_BYTES] {
+    sign_internal(sk, msg, &[], false)
+}
+
+/// FIPS 204 signing with an explicit context string and caller-supplied `rnd`.
+/// Passing all zeros reproduces deterministic signing.
+#[cfg(any(test, feature = "test-vectors"))]
+pub fn sign_with_context_and_rnd(
+    sk: &[u8; SECRET_KEY_BYTES],
+    msg: &[u8],
+    context: &[u8],
+    rnd: &[u8; 32],
+) -> [u8; SIGNATURE_BYTES] {
+    sign_internal_rnd(sk, msg, context, rnd)
+}
+
+fn sign_internal(
+    sk: &[u8; SECRET_KEY_BYTES],
+    msg: &[u8],
+    context: &[u8],
+    deterministic: bool,
+) -> [u8; SIGNATURE_BYTES] {
+    let mut rnd = [0u8; 32];
+    if !deterministic {
+        let _ = fill_random(&mut rnd);
+    }
+    sign_internal_rnd(sk, msg, context, &rnd)
+}
+
+fn sign_internal_rnd(
+    sk: &[u8; SECRET_KEY_BYTES],
+    msg: &[u8],
+    context: &[u8],
+    rnd: &[u8; 32],
+) -> [u8; SIGNATURE_BYTES] {
     let mut rho = [0u8; 32];
-    let mut tr = [0u8; 32];
+    let mut tr = [0u8; 64];
     let mut key = [0u8; 32];
     let mut t0 = [[0i32; N]; K];
     let mut s1 = [[0i32; N]; L];
     let mut s2 = [[0i32; N]; K];
     unpack_sk(&mut rho, &mut key, &mut tr, &mut t0, &mut s1, &mut s2, sk);
 
-    let pre = [0u8, 0u8];
-    let prelen = 2usize;
-
-        let (zetas, invntt_factor) = zeta_table();
+    let (zetas, invntt_factor) = zeta_table();
 
     let mat = polyvec_matrix_expand(&rho);
 
-    let mut mu = [0u8; 64];
-    {
-        let mut state = Keccak::shake256();
-        state.absorb(&tr);
-        state.absorb(&pre[..prelen]);
-        state.absorb(msg);
-        state.squeeze(&mut mu);
-    }
+    let mu = message_representative(&tr, context, msg);
 
+    // FIPS 204 Algorithm 7: deterministic signing uses the all-zero rnd, hedged
+    // signing supplies 32 fresh random bytes.
     let mut rhoprime = [0u8; 64];
     {
         let mut state = Keccak::shake256();
         state.absorb(&key);
-        state.absorb(&[0u8; 32]);
+        state.absorb(rnd);
         state.absorb(&mu);
         state.squeeze(&mut rhoprime);
     }
@@ -971,6 +1032,16 @@ pub fn sign(sk: &[u8; SECRET_KEY_BYTES], msg: &[u8]) -> [u8; SIGNATURE_BYTES] {
 }
 
 pub fn verify(pk: &[u8; PUBLIC_KEY_BYTES], msg: &[u8], sig: &[u8; SIGNATURE_BYTES]) -> bool {
+    verify_with_context(pk, msg, &[], sig)
+}
+
+/// FIPS 204 Algorithm 3 (ML-DSA.Verify) with an explicit context string.
+pub fn verify_with_context(
+    pk: &[u8; PUBLIC_KEY_BYTES],
+    msg: &[u8],
+    context: &[u8],
+    sig: &[u8; SIGNATURE_BYTES],
+) -> bool {
     let mut rho = [0u8; 32];
     let mut t1 = [[0i32; N]; K];
     unpack_pk(&mut rho, &mut t1, pk);
@@ -987,22 +1058,13 @@ pub fn verify(pk: &[u8; PUBLIC_KEY_BYTES], msg: &[u8], sig: &[u8; SIGNATURE_BYTE
         return false;
     }
 
-    let pre = [0u8, 0u8];
-    let prelen = 2usize;
-
-    let mut mu = [0u8; 64];
+    let mut tr = [0u8; 64];
     {
-        let mut h = Keccak::sha3_256();
+        let mut h = Keccak::shake256();
         h.absorb(pk);
-        let mut tr = [0u8; 32];
         h.squeeze(&mut tr);
-
-        let mut state = Keccak::shake256();
-        state.absorb(&tr);
-        state.absorb(&pre[..prelen]);
-        state.absorb(msg);
-        state.squeeze(&mut mu);
     }
+    let mu = message_representative(&tr, context, msg);
 
     let mat = polyvec_matrix_expand(&rho);
     let cp = poly_challenge(&c_bytes);
@@ -1068,7 +1130,7 @@ mod tests {
 
         // Manually sign to capture w1_high and other state
         let mut rho = [0u8; 32];
-        let mut tr = [0u8; 32];
+        let mut tr = [0u8; 64];
         let mut key = [0u8; 32];
         let mut t0 = [[0i32; N]; K];
         let mut s1 = [[0i32; N]; L];
@@ -1291,7 +1353,7 @@ mod tests {
         let msg = b"test";
 
         let mut rho = [0u8; 32];
-        let mut tr = [0u8; 32];
+        let mut tr = [0u8; 64];
         let mut key = [0u8; 32];
         let mut t0 = [[0i32; N]; K];
         let mut s1 = [[0i32; N]; L];
@@ -1432,7 +1494,7 @@ mod tests {
         let msg = b"test";
 
         let mut rho = [0u8; 32];
-        let mut tr = [0u8; 32];
+        let mut tr = [0u8; 64];
         let mut key = [0u8; 32];
         let mut t0 = [[0i32; N]; K];
         let mut s1 = [[0i32; N]; L];

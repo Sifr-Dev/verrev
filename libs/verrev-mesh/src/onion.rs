@@ -11,7 +11,7 @@ impl OnionPacket {
     /// Builds an onion packet from the inside out.
     /// `route` is ordered from first hop to last hop (destination).
     /// `keys` must correspond 1:1 with `route`.
-    pub fn build(payload: &[u8], route: &[Identity], keys: &[[u8; 32]]) -> Self {
+    pub fn build(payload: &[u8], route: &[Identity], keys: &[[u8; 32]]) -> Result<Self> {
         let mut current_payload = payload.to_vec();
         
         // Traverse backwards: from destination to first hop
@@ -33,7 +33,9 @@ impl OnionPacket {
             plaintext.extend_from_slice(&current_payload);
             
             // Encrypt
-            let nonce = verrev_crypto::util::random_u64().to_le_bytes(); // Use 8 bytes random, pad to 24
+            let nonce = verrev_crypto::util::random_u64()
+                .map_err(|_| MeshError::EncryptionFailed)?
+                .to_le_bytes(); // Use 8 bytes random, pad to 24
             let mut full_nonce = [0u8; 24];
             full_nonce[0..8].copy_from_slice(&nonce);
             
@@ -49,7 +51,7 @@ impl OnionPacket {
             current_payload = layer;
         }
         
-        OnionPacket { data: current_payload }
+        Ok(OnionPacket { data: current_payload })
     }
 
     /// Peels one layer of the onion.
@@ -109,7 +111,7 @@ mod tests {
         let key3 = [3u8; 32];
         let keys = alloc::vec![key1, key2, key3];
         
-        let onion = OnionPacket::build(payload, &route, &keys);
+        let onion = OnionPacket::build(payload, &route, &keys).unwrap();
         
         // Node 1 peels
         let (next_hop1, inner1) = onion.peel(&key1).unwrap();

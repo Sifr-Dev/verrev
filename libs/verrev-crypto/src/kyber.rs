@@ -1,549 +1,584 @@
+//! ML-KEM-1024 as specified by FIPS 203.
+//!
+//! Public operations obtain fresh entropy from the operating system and report
+//! failures. Fixed-seed operations are deliberately compiled only for tests.
+
+use crate::util::{fill_random, RandomnessError};
 use verrev_hash::sha3::*;
-use crate::util::*;
 
 const N: usize = 256;
 const Q: i32 = 3329;
-
-const K: usize = 4; // Kyber-1024
+const K: usize = 4;
 const ETA1: usize = 2;
 const ETA2: usize = 2;
+const DU: usize = 11;
+const DV: usize = 5;
 const POLYBYTES: usize = 384;
-const COMPRESSED_BYTES: usize = 1568; // Kyber-1024 ciphertext
+const PKE_SECRET_KEY_BYTES: usize = K * POLYBYTES;
 
-pub const SECRET_KEY_BYTES: usize = 4096;
+pub const SECRET_KEY_BYTES: usize = 3168;
 pub const PUBLIC_KEY_BYTES: usize = 1568;
-pub const CIPHERTEXT_BYTES: usize = COMPRESSED_BYTES;
+pub const CIPHERTEXT_BYTES: usize = 1568;
 pub const SHARED_SECRET_BYTES: usize = 32;
 
-fn barrett_reduce(a: i32) -> i32 {
-    let v = ((1i32 << 26) + (Q / 2)) / Q;
-    let t = (v * a + (1 << 25)) >> 26;
-    a - t * Q
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Error {
+    Randomness(RandomnessError),
+    InvalidEncapsulationKey,
+    InvalidDecapsulationKey,
 }
 
-const QINV: i32 = -3327;
-
-fn montgomery_reduce(a: i32) -> i32 {
-    let t = (a as i16).wrapping_mul(QINV as i16) as i32;
-    
-    (a.wrapping_sub(t.wrapping_mul(Q))) >> 16
+impl From<RandomnessError> for Error {
+    fn from(error: RandomnessError) -> Self {
+        Self::Randomness(error)
+    }
 }
 
-fn fqmul(a: i32, b: i32) -> i32 {
-    montgomery_reduce(a * b)
+#[inline]
+fn mod_q(value: i32) -> i32 {
+    value.rem_euclid(Q)
 }
 
-fn brv7(x: usize) -> usize {
-    let mut r = 0usize;
-    for i in 0..7 {
-        if x & (1 << i) != 0 {
-            r |= 1 << (6 - i);
+#[inline]
+fn add_q(a: i32, b: i32) -> i32 {
+    mod_q(a + b)
+}
+
+#[inline]
+fn sub_q(a: i32, b: i32) -> i32 {
+    mod_q(a - b)
+}
+
+#[inline]
+fn mul_q(a: i32, b: i32) -> i32 {
+    ((a as i64 * b as i64) % Q as i64) as i32
+}
+
+fn bit_rev7(value: usize) -> usize {
+    let mut input = value;
+    let mut output = 0;
+    for _ in 0..7 {
+        output = (output << 1) | (input & 1);
+        input >>= 1;
+    }
+    output
+}
+
+fn mod_pow(mut base: i32, mut exponent: usize) -> i32 {
+    let mut result = 1;
+    while exponent != 0 {
+        if exponent & 1 != 0 {
+            result = mul_q(result, base);
         }
+        base = mul_q(base, base);
+        exponent >>= 1;
     }
-    r
+    result
 }
 
-fn nist_zeta_table() -> [i32; 128] {
-    const MONT: i32 = 2285;
-    let mut zpow = [0i32; 128];
-    zpow[0] = 1;
-    for i in 1..128 {
-        zpow[i] = (zpow[i - 1] * 17) % Q;
-    }
-    let mut zetas = [0i32; 128];
-    for i in 0..128 {
-        let val = (MONT * zpow[brv7(i)]) % Q;
-        zetas[i] = if val > Q / 2 { val - Q } else { val };
+fn ntt_zetas() -> [i32; 128] {
+    let mut zetas = [0; 128];
+    for (index, zeta) in zetas.iter_mut().enumerate() {
+        *zeta = mod_pow(17, bit_rev7(index));
     }
     zetas
 }
 
-fn ntt(a: &mut [i32; N]) {
-    let zetas = nist_zeta_table();
-    let mut r = [0i16; N];
-    for i in 0..N { r[i] = a[i] as i16; }
-    let mut k = 1;
+fn base_case_zetas() -> [i32; 128] {
+    let mut zetas = [0; 128];
+    for (index, zeta) in zetas.iter_mut().enumerate() {
+        *zeta = mod_pow(17, 2 * bit_rev7(index) + 1);
+    }
+    zetas
+}
+
+fn ntt(poly: &mut [i32; N]) {
+    let zetas = ntt_zetas();
+    let mut index = 1;
     let mut len = 128;
     while len >= 2 {
         let mut start = 0;
         while start < N {
-            let zeta = zetas[k];
-            k += 1;
-            for j in start..start + len {
-                let t = fqmul(zeta, r[j + len] as i32) as i16;
-                r[j + len] = r[j].wrapping_sub(t);
-                r[j] = r[j].wrapping_add(t);
+            let zeta = zetas[index];
+            index += 1;
+            for offset in 0..len {
+                let j = start + offset;
+                let t = mul_q(zeta, poly[j + len]);
+                poly[j + len] = sub_q(poly[j], t);
+                poly[j] = add_q(poly[j], t);
             }
-            start += len * 2;
+            start += 2 * len;
         }
         len >>= 1;
     }
-    for i in 0..N { a[i] = r[i] as i32; }
 }
 
-fn invntt(a: &mut [i32; N]) {
-    let zetas = nist_zeta_table();
-    let mut r = [0i16; N];
-    for i in 0..N { r[i] = a[i] as i16; }
-    const F: i32 = 1441;
-    let mut k = 127;
+fn inv_ntt(poly: &mut [i32; N]) {
+    let zetas = ntt_zetas();
+    let mut index = 127;
     let mut len = 2;
     while len <= 128 {
         let mut start = 0;
         while start < N {
-            let zeta = zetas[k];
-            k -= 1;
-            for j in start..start + len {
-                let t = r[j];
-                r[j] = barrett_reduce((t + r[j + len]) as i32) as i16;
-                r[j + len] = r[j + len].wrapping_sub(t);
-                r[j + len] = fqmul(zeta, r[j + len] as i32) as i16;
+            let zeta = zetas[index];
+            index -= 1;
+            for offset in 0..len {
+                let j = start + offset;
+                let t = poly[j];
+                poly[j] = add_q(t, poly[j + len]);
+                poly[j + len] = mul_q(zeta, sub_q(poly[j + len], t));
             }
-            start += len * 2;
+            start += 2 * len;
         }
         len <<= 1;
     }
-    for i in 0..N {
-        a[i] = fqmul(r[i] as i32, F);
+    let scale = mod_pow(128, (Q - 2) as usize);
+    for coefficient in poly {
+        *coefficient = mul_q(*coefficient, scale);
     }
 }
 
-fn basemul(a: &[i32; 2], b: &[i32; 2], zeta: i32) -> [i32; 2] {
-    let r0 = fqmul(a[1], b[1]);
-    let r0 = fqmul(r0, zeta);
-    let r0 = barrett_reduce(r0 + fqmul(a[0], b[0]));
-    let r1 = barrett_reduce(fqmul(a[0], b[1]) + fqmul(a[1], b[0]));
-    [r0, r1]
-}
-
-fn mul_ntt(a: &[i32; N], b: &[i32; N]) -> [i32; N] {
-    let zetas = nist_zeta_table();
-    let mut c = [0i32; N];
-    for i in 0..N / 4 {
-        let ca = basemul(&[a[4 * i], a[4 * i + 1]], &[b[4 * i], b[4 * i + 1]], zetas[64 + i]);
-        c[4 * i] = ca[0];
-        c[4 * i + 1] = ca[1];
-        let cb = basemul(&[a[4 * i + 2], a[4 * i + 3]], &[b[4 * i + 2], b[4 * i + 3]], -zetas[64 + i]);
-        c[4 * i + 2] = cb[0];
-        c[4 * i + 3] = cb[1];
+fn multiply_ntts(a: &[i32; N], b: &[i32; N]) -> [i32; N] {
+    let zetas = base_case_zetas();
+    let mut result = [0; N];
+    for i in 0..128 {
+        let a0 = a[2 * i];
+        let a1 = a[2 * i + 1];
+        let b0 = b[2 * i];
+        let b1 = b[2 * i + 1];
+        result[2 * i] = add_q(mul_q(a0, b0), mul_q(mul_q(a1, b1), zetas[i]));
+        result[2 * i + 1] = add_q(mul_q(a0, b1), mul_q(a1, b0));
     }
-    c
-}
-
-fn poly_mul(a: &[i32; N], b: &[i32; N]) -> [i32; N] {
-    let mut aa = *a;
-    let mut bb = *b;
-    ntt(&mut aa);
-    ntt(&mut bb);
-    let mut c = mul_ntt(&aa, &bb);
-    invntt(&mut c);
-    c
+    result
 }
 
 fn poly_add(a: &[i32; N], b: &[i32; N]) -> [i32; N] {
-    let mut c = [0i32; N];
+    let mut result = [0; N];
     for i in 0..N {
-        c[i] = barrett_reduce(a[i] + b[i]);
+        result[i] = add_q(a[i], b[i]);
     }
-    c
+    result
 }
 
-fn poly_tobytes(a: &[i32; N]) -> [u8; POLYBYTES] {
-    let mut out = [0u8; POLYBYTES];
-    let mut j = 0;
-    for i in 0..N / 2 {
-        let t0 = a[2 * i].rem_euclid(Q) as u16;
-        let t1 = a[2 * i + 1].rem_euclid(Q) as u16;
-        out[j] = t0 as u8;
-        out[j + 1] = ((t0 >> 8) | (t1 << 4)) as u8;
-        out[j + 2] = (t1 >> 4) as u8;
-        j += 3;
+fn poly_sub(a: &[i32; N], b: &[i32; N]) -> [i32; N] {
+    let mut result = [0; N];
+    for i in 0..N {
+        result[i] = sub_q(a[i], b[i]);
     }
-    out
+    result
 }
 
-fn poly_frombytes(a: &[u8]) -> [i32; N] {
-    let mut out = [0i32; N];
-    let mut j = 0;
-    for i in 0..N / 2 {
-        let t0 = a[j] as u16 | ((a[j + 1] as u16 & 0x0f) << 8);
-        let t1 = (a[j + 1] as u16 >> 4) | ((a[j + 2] as u16) << 4);
-        out[2 * i] = t0 as i32;
-        out[2 * i + 1] = t1 as i32;
-        j += 3;
-    }
-    out
-}
-
-fn cbd(buf: &[u8], eta: usize) -> [i32; N] {
-    let mut a = [0i32; N];
-    if eta == 2 {
-        for i in 0..N / 4 {
-            let t = (buf[i / 4] as u32) >> (2 * (i % 4)) & 0x03;
-            let b = (buf[N / 4 + i / 4] as u32) >> (2 * (i % 4)) & 0x03;
-            a[4 * i] = (t & 1) as i32 - ((t >> 1) & 1) as i32;
-            a[4 * i + 1] = (b & 1) as i32 - ((b >> 1) & 1) as i32;
-            a[4 * i + 2] = ((t >> 2) & 1) as i32 - ((t >> 3) & 1) as i32;
-            a[4 * i + 3] = ((b >> 2) & 1) as i32 - ((b >> 3) & 1) as i32;
-        }
-    }
-    a
-}
-
-fn generate_a_hat(rho: &[u8; 32]) -> [[i32; N]; K * K] {
-    let mut a_hat = [[0i32; N]; K * K];
-    for idx in 0..K * K {
-        let mut h = Keccak::shake256();
-        h.absorb(rho);
-        h.absorb(&(idx as u8).to_le_bytes());
-        let mut buf = [0u8; 768];
-        h.squeeze(&mut buf);
-        for j in 0..N {
-            let d = (buf[2 * j] as u16) | ((buf[2 * j + 1] as u16) << 8);
-            a_hat[idx][j] = (d % Q as u16) as i32;
-        }
-    }
-    a_hat
-}
-
-pub fn encaps(pk: &[u8; PUBLIC_KEY_BYTES]) -> ([u8; CIPHERTEXT_BYTES], [u8; SHARED_SECRET_BYTES]) {
-    ccakem_encaps(pk)
-}
-
-pub fn decaps(sk: &[u8; SECRET_KEY_BYTES], ct: &[u8; CIPHERTEXT_BYTES]) -> [u8; SHARED_SECRET_BYTES] {
-    ccakem_decaps(sk, ct)
-}
-
-// ——— Kyber.CPAPKE helpers ———
-
-fn compress(x: i32, d: usize) -> i32 {
-    let q = Q as i64;
-    let x_pos = x.rem_euclid(Q) as i64;
-    let v = (x_pos << d) + (q >> 1);
-    let c = v / q;
-    let mask = (1i64 << d) - 1;
-    (c & mask) as i32
-}
-
-fn decompress(y: i32, d: usize) -> i32 {
-    let q = Q as i64;
-    let v = (y as i64) * q + (1i64 << (d - 1));
-    let r = v >> d;
-    if r >= q { (q - 1) as i32 } else { r as i32 }
-}
-
-fn poly_compress(poly: &[i32; N], d: usize) -> alloc::vec::Vec<u8> {
-    let out_len = d * N / 8;
-    let mut out = alloc::vec::Vec::with_capacity(out_len);
-    let mut byte = 0u8;
+fn byte_encode(poly: &[i32; N], d: usize, output: &mut [u8]) {
+    debug_assert_eq!(output.len(), 32 * d);
+    let mut accumulator = 0u32;
     let mut bits = 0;
-    for i in 0..N {
-        let c = compress(poly[i], d) as u16;
-        for b in (0..d).rev() {
-            byte = (byte << 1) | (((c >> b) & 1) as u8);
-            bits += 1;
-            if bits == 8 {
-                out.push(byte);
-                byte = 0;
-                bits = 0;
-            }
+    let mut offset = 0;
+    for coefficient in poly {
+        let value = if d == 12 {
+            mod_q(*coefficient) as u32
+        } else {
+            *coefficient as u32
+        };
+        accumulator |= value << bits;
+        bits += d;
+        while bits >= 8 {
+            output[offset] = accumulator as u8;
+            offset += 1;
+            accumulator >>= 8;
+            bits -= 8;
         }
     }
-    out
 }
 
-fn poly_decompress(buf: &[u8], d: usize) -> [i32; N] {
-    let mut out = [0i32; N];
-    let mut byte_idx = 0;
-    let mut bit_idx = 0;
-    for i in 0..N {
-        let mut c = 0i32;
-        for b in (0..d).rev() {
-            let bit = ((buf[byte_idx] >> (7 - bit_idx)) & 1) as i32;
-            c |= bit << b;
-            bit_idx += 1;
-            if bit_idx == 8 {
-                bit_idx = 0;
-                byte_idx += 1;
-            }
+fn byte_decode(input: &[u8], d: usize) -> [i32; N] {
+    debug_assert_eq!(input.len(), 32 * d);
+    let mask = (1u32 << d) - 1;
+    let mut poly = [0; N];
+    let mut accumulator = 0u32;
+    let mut bits = 0;
+    let mut offset = 0;
+    for coefficient in &mut poly {
+        while bits < d {
+            accumulator |= (input[offset] as u32) << bits;
+            offset += 1;
+            bits += 8;
         }
-        out[i] = decompress(c, d);
+        let value = accumulator & mask;
+        accumulator >>= d;
+        bits -= d;
+        *coefficient = if d == 12 {
+            value as i32 % Q
+        } else {
+            value as i32
+        };
     }
-    out
+    poly
 }
 
-fn msg_to_poly(msg: &[u8; 32]) -> [i32; N] {
-    let mut poly = [0i32; N];
-    for i in 0..32 {
-        for j in 0..8 {
-            let bit = (msg[i] >> j) & 1;
-            poly[8 * i + j] = bit as i32 * ((Q - 1) / 2);
+fn poly_tobytes(poly: &[i32; N]) -> [u8; POLYBYTES] {
+    let mut output = [0; POLYBYTES];
+    byte_encode(poly, 12, &mut output);
+    output
+}
+
+fn poly_frombytes(input: &[u8]) -> [i32; N] {
+    byte_decode(input, 12)
+}
+
+fn sample_ntt(rho: &[u8; 32], column: u8, row: u8) -> [i32; N] {
+    let mut xof = Keccak::shake128();
+    xof.absorb(rho);
+    xof.absorb(&[column, row]);
+    let mut poly = [0; N];
+    let mut count = 0;
+    let mut block = [0u8; 168];
+    while count < N {
+        xof.squeeze(&mut block);
+        let mut offset = 0;
+        while count < N && offset + 3 <= block.len() {
+            let d1 = block[offset] as u16 | ((block[offset + 1] as u16 & 15) << 8);
+            let d2 = (block[offset + 1] as u16 >> 4) | ((block[offset + 2] as u16) << 4);
+            offset += 3;
+            if d1 < Q as u16 {
+                poly[count] = d1 as i32;
+                count += 1;
+            }
+            if d2 < Q as u16 && count < N {
+                poly[count] = d2 as i32;
+                count += 1;
+            }
         }
     }
     poly
 }
 
-fn poly_to_msg(poly: &[i32; N]) -> [u8; 32] {
-    let mut msg = [0u8; 32];
-    for i in 0..32 {
-        let mut byte = 0u8;
-        for j in 0..8 {
-            let c = compress(poly[8 * i + j], 1);
-            byte |= (c as u8) << j;
+fn generate_a_hat(rho: &[u8; 32]) -> [[i32; N]; K * K] {
+    let mut matrix = [[0; N]; K * K];
+    for row in 0..K {
+        for column in 0..K {
+            matrix[row * K + column] = sample_ntt(rho, column as u8, row as u8);
         }
-        msg[i] = byte;
     }
+    matrix
+}
+
+fn sample_poly_cbd(input: &[u8], eta: usize) -> [i32; N] {
+    debug_assert_eq!(input.len(), 64 * eta);
+    let mut poly = [0; N];
+    for i in 0..N {
+        let mut x = 0;
+        let mut y = 0;
+        for j in 0..eta {
+            let x_bit = 2 * i * eta + j;
+            let y_bit = x_bit + eta;
+            x += ((input[x_bit / 8] >> (x_bit % 8)) & 1) as i32;
+            y += ((input[y_bit / 8] >> (y_bit % 8)) & 1) as i32;
+        }
+        poly[i] = mod_q(x - y);
+    }
+    poly
+}
+
+fn prf(seed: &[u8; 32], nonce: u8, eta: usize) -> [u8; 128] {
+    let mut xof = Keccak::shake256();
+    xof.absorb(seed);
+    xof.absorb(&[nonce]);
+    let mut output = [0; 128];
+    xof.squeeze(&mut output[..64 * eta]);
+    output
+}
+
+fn sampled_noise(seed: &[u8; 32], nonce: u8, eta: usize) -> [i32; N] {
+    sample_poly_cbd(&prf(seed, nonce, eta)[..64 * eta], eta)
+}
+
+fn compress(value: i32, d: usize) -> i32 {
+    let q = Q as i64;
+    ((((mod_q(value) as i64) << d) + q / 2) / q & ((1i64 << d) - 1)) as i32
+}
+
+fn decompress(value: i32, d: usize) -> i32 {
+    ((value as i64 * Q as i64 + (1i64 << (d - 1))) >> d) as i32
+}
+
+fn poly_compress(poly: &[i32; N], d: usize, output: &mut [u8]) {
+    let mut compressed = [0; N];
+    for i in 0..N {
+        compressed[i] = compress(poly[i], d);
+    }
+    byte_encode(&compressed, d, output);
+}
+
+fn poly_decompress(input: &[u8], d: usize) -> [i32; N] {
+    let mut poly = byte_decode(input, d);
+    for coefficient in &mut poly {
+        *coefficient = decompress(*coefficient, d);
+    }
+    poly
+}
+
+fn msg_to_poly(msg: &[u8; 32]) -> [i32; N] {
+    let decoded = byte_decode(msg, 1);
+    let mut poly = [0; N];
+    for i in 0..N {
+        poly[i] = decompress(decoded[i], 1);
+    }
+    poly
+}
+
+fn poly_to_msg(poly: &[i32; N]) -> [u8; 32] {
+    let mut msg = [0; 32];
+    poly_compress(poly, 1, &mut msg);
     msg
 }
 
-fn prf(seed: &[u8; 32], nonce: u8, buf: &mut [u8]) {
-    let mut h = Keccak::shake256();
-    h.absorb(seed);
-    h.absorb(&[nonce]);
-    h.squeeze(buf);
-}
-
-// ——— Kyber.CPAPKE ———
-
-fn cpapke_enc(pk: &[u8; PUBLIC_KEY_BYTES], msg: &[u8; 32], coins: &[u8; 32]) -> [u8; CIPHERTEXT_BYTES] {
-    const DU: usize = 11;
-    const DV: usize = 5;
-
-    let rho_offset = K * POLYBYTES;
-    let mut rho = [0u8; 32];
-    rho.copy_from_slice(&pk[rho_offset..rho_offset + 32]);
-
-    let mut t = [[0i32; N]; K];
-    for i in 0..K {
-        t[i] = poly_frombytes(&pk[i * POLYBYTES..(i + 1) * POLYBYTES]);
-    }
-
-    let a = generate_a_hat(&rho);
-
-    let mut r_vec = [[0i32; N]; K];
-    for i in 0..K {
-        let mut buf = [0u8; N * ETA1 / 4];
-        prf(coins, (2 * i) as u8, &mut buf);
-        r_vec[i] = cbd(&buf, ETA1);
-    }
-
-    let mut e1 = [[0i32; N]; K];
-    for i in 0..K {
-        let mut buf = [0u8; N * ETA2 / 4];
-        prf(coins, (2 * i + 1) as u8, &mut buf);
-        e1[i] = cbd(&buf, ETA2);
-    }
-
-    let e2 = {
-        let mut buf = [0u8; N * ETA2 / 4];
-        prf(coins, (2 * K) as u8, &mut buf);
-        cbd(&buf, ETA2)
-    };
-
-    let mut u = [[0i32; N]; K];
-    for i in 0..K {
-        let mut sum = [0i32; N];
-        for j in 0..K {
-            let prod = poly_mul(&a[j * K + i], &r_vec[j]);
-            sum = poly_add(&sum, &prod);
+fn matrix_vector_product(
+    matrix: &[[i32; N]; K * K],
+    vector: &[[i32; N]; K],
+    transpose: bool,
+) -> [[i32; N]; K] {
+    let mut result = [[0; N]; K];
+    for row in 0..K {
+        for column in 0..K {
+            let index = if transpose {
+                column * K + row
+            } else {
+                row * K + column
+            };
+            let product = multiply_ntts(&matrix[index], &vector[column]);
+            result[row] = poly_add(&result[row], &product);
         }
-        u[i] = poly_add(&sum, &e1[i]);
     }
-
-    let msg_poly = msg_to_poly(msg);
-    let mut v_parts = [0i32; N];
-    for i in 0..K {
-        let prod = poly_mul(&t[i], &r_vec[i]);
-        v_parts = poly_add(&v_parts, &prod);
-    }
-    let v = poly_add(&poly_add(&v_parts, &e2), &msg_poly);
-
-    let mut ct = [0u8; CIPHERTEXT_BYTES];
-    let mut offset = 0;
-    for i in 0..K {
-        let comp = poly_compress(&u[i], DU);
-        let len = DU * N / 8;
-        ct[offset..offset + len].copy_from_slice(&comp);
-        offset += len;
-    }
-    let comp_v = poly_compress(&v, DV);
-    ct[offset..offset + DV * N / 8].copy_from_slice(&comp_v);
-    ct
+    result
 }
 
-fn cpapke_dec(sk: &[u8; SECRET_KEY_BYTES], ct: &[u8; CIPHERTEXT_BYTES]) -> [u8; 32] {
-    const DU: usize = 11;
-    const DV: usize = 5;
+fn cpapke_keygen(d: &[u8; 32]) -> ([u8; PUBLIC_KEY_BYTES], [u8; PKE_SECRET_KEY_BYTES]) {
+    let mut g_input = [0; 33];
+    g_input[..32].copy_from_slice(d);
+    g_input[32] = K as u8;
+    let expanded = sha3_512(&g_input);
+    let mut rho = [0; 32];
+    let mut sigma = [0; 32];
+    rho.copy_from_slice(&expanded[..32]);
+    sigma.copy_from_slice(&expanded[32..]);
 
-    let mut u = [[0i32; N]; K];
-    let mut offset = 0;
+    let matrix = generate_a_hat(&rho);
+    let mut s = [[0; N]; K];
+    let mut e = [[0; N]; K];
     for i in 0..K {
-        u[i] = poly_decompress(&ct[offset..offset + DU * N / 8], DU);
-        offset += DU * N / 8;
+        s[i] = sampled_noise(&sigma, i as u8, ETA1);
+        e[i] = sampled_noise(&sigma, (K + i) as u8, ETA1);
+        ntt(&mut s[i]);
+        ntt(&mut e[i]);
     }
-    let v = poly_decompress(&ct[offset..offset + DV * N / 8], DV);
 
-    let mut s = [[0i32; N]; K];
+    let mut t = matrix_vector_product(&matrix, &s, false);
+    let mut ek = [0; PUBLIC_KEY_BYTES];
+    let mut dk = [0; PKE_SECRET_KEY_BYTES];
     for i in 0..K {
-        s[i] = poly_frombytes(&sk[i * POLYBYTES..(i + 1) * POLYBYTES]);
+        t[i] = poly_add(&t[i], &e[i]);
+        ek[i * POLYBYTES..(i + 1) * POLYBYTES]
+            .copy_from_slice(&poly_tobytes(&t[i]));
+        dk[i * POLYBYTES..(i + 1) * POLYBYTES]
+            .copy_from_slice(&poly_tobytes(&s[i]));
     }
-
-    let mut sum = [0i32; N];
-    for i in 0..K {
-        let prod = poly_mul(&s[i], &u[i]);
-        sum = poly_add(&sum, &prod);
-    }
-
-    let mut m_poly = [0i32; N];
-    for k in 0..N {
-        m_poly[k] = barrett_reduce(v[k] - sum[k]);
-    }
-
-    poly_to_msg(&m_poly)
+    ek[K * POLYBYTES..].copy_from_slice(&rho);
+    (ek, dk)
 }
 
-// ——— Kyber.CCAKEM ———
-
-pub fn ccakem_keygen(seed: Option<&[u8; 64]>) -> ([u8; SECRET_KEY_BYTES], [u8; PUBLIC_KEY_BYTES]) {
-    let mut seed_buf = [0u8; 64];
-    if let Some(s) = seed {
-        seed_buf.copy_from_slice(s);
-    } else {
-        fill_random(&mut seed_buf);
-    }
-
-    let mut z = [0u8; 32];
-    z.copy_from_slice(&seed_buf[32..64]);
-
-    let g_out = sha3_512(&seed_buf[..32]);
-    let mut rho = [0u8; 32];
-    let mut sigma = [0u8; 32];
-    rho.copy_from_slice(&g_out[..32]);
-    sigma.copy_from_slice(&g_out[32..64]);
-
-    let a_hat = generate_a_hat(&rho);
-
-    let mut s = [[0i32; N]; K];
+fn cpapke_enc(
+    ek: &[u8; PUBLIC_KEY_BYTES],
+    msg: &[u8; 32],
+    randomness: &[u8; 32],
+) -> [u8; CIPHERTEXT_BYTES] {
+    let mut t = [[0; N]; K];
     for i in 0..K {
-        let mut buf = [0u8; N * ETA1 / 4];
-        let mut h = Keccak::shake256();
-        h.absorb(&sigma);
-        h.absorb(&[i as u8]);
-        h.squeeze(&mut buf);
-        s[i] = cbd(&buf, ETA1);
+        t[i] = poly_frombytes(&ek[i * POLYBYTES..(i + 1) * POLYBYTES]);
     }
+    let mut rho = [0; 32];
+    rho.copy_from_slice(&ek[K * POLYBYTES..]);
+    let matrix = generate_a_hat(&rho);
 
-    let mut e = [[0i32; N]; K];
+    let mut y = [[0; N]; K];
+    let mut e1 = [[0; N]; K];
     for i in 0..K {
-        let mut buf = [0u8; N * ETA1 / 4];
-        let mut h = Keccak::shake256();
-        h.absorb(&sigma);
-        h.absorb(&[(K + i) as u8]);
-        h.squeeze(&mut buf);
-        e[i] = cbd(&buf, ETA1);
+        y[i] = sampled_noise(randomness, i as u8, ETA1);
+        e1[i] = sampled_noise(randomness, (K + i) as u8, ETA2);
+        ntt(&mut y[i]);
     }
+    let e2 = sampled_noise(randomness, (2 * K) as u8, ETA2);
 
-    let mut t = [[0i32; N]; K];
+    let mut u = matrix_vector_product(&matrix, &y, true);
+    let mut v = [0; N];
     for i in 0..K {
-        let mut sum = [0i32; N];
-        for j in 0..K {
-            let prod = poly_mul(&a_hat[i * K + j], &s[j]);
-            sum = poly_add(&sum, &prod);
-        }
-        t[i] = poly_add(&sum, &e[i]);
+        u[i] = inv_ntt_result(&u[i]);
+        u[i] = poly_add(&u[i], &e1[i]);
+        let product = multiply_ntts(&t[i], &y[i]);
+        v = poly_add(&v, &product);
     }
+    let mut v = inv_ntt_result(&v);
+    v = poly_add(&v, &e2);
+    v = poly_add(&v, &msg_to_poly(msg));
 
-    let mut pk = [0u8; PUBLIC_KEY_BYTES];
-    for i in 0..K {
-        let bytes = poly_tobytes(&t[i]);
-        pk[i * POLYBYTES..(i + 1) * POLYBYTES].copy_from_slice(&bytes);
+    let mut ciphertext = [0; CIPHERTEXT_BYTES];
+    for (i, poly) in u.iter().enumerate() {
+        poly_compress(poly, DU, &mut ciphertext[i * 32 * DU..(i + 1) * 32 * DU]);
     }
-    pk[K * POLYBYTES..K * POLYBYTES + 32].copy_from_slice(&rho);
-
-    let pk_hash = sha3_256(&pk);
-
-    let mut sk = [0u8; SECRET_KEY_BYTES];
-    for i in 0..K {
-        let bytes = poly_tobytes(&s[i]);
-        sk[i * POLYBYTES..(i + 1) * POLYBYTES].copy_from_slice(&bytes);
-    }
-    let s_offset = K * POLYBYTES;
-    sk[s_offset..s_offset + PUBLIC_KEY_BYTES].copy_from_slice(&pk);
-    let hpk_offset = s_offset + PUBLIC_KEY_BYTES;
-    sk[hpk_offset..hpk_offset + 32].copy_from_slice(&pk_hash);
-    sk[hpk_offset + 32..hpk_offset + 64].copy_from_slice(&z);
-
-    (sk, pk)
+    poly_compress(&v, DV, &mut ciphertext[K * 32 * DU..]);
+    ciphertext
 }
 
-pub fn ccakem_encaps(pk: &[u8; PUBLIC_KEY_BYTES]) -> ([u8; CIPHERTEXT_BYTES], [u8; SHARED_SECRET_BYTES]) {
-    let mut m = [0u8; 32];
-    fill_random(&mut m);
-
-    let pk_hash = sha3_256(pk);
-
-    let mut g_input = [0u8; 64];
-    g_input[..32].copy_from_slice(&m);
-    g_input[32..64].copy_from_slice(&pk_hash);
-    let g_output = sha3_512(&g_input);
-
-    let mut k_bar = [0u8; 32];
-    let mut r_coins = [0u8; 32];
-    k_bar.copy_from_slice(&g_output[..32]);
-    r_coins.copy_from_slice(&g_output[32..64]);
-
-    let ct = cpapke_enc(pk, &m, &r_coins);
-
-    let c_hash = sha3_256(&ct);
-    let mut kdf_input = [0u8; 64];
-    kdf_input[..32].copy_from_slice(&k_bar);
-    kdf_input[32..64].copy_from_slice(&c_hash);
-    let ss = sha3_256(&kdf_input);
-
-    (ct, ss)
+fn inv_ntt_result(poly: &[i32; N]) -> [i32; N] {
+    let mut result = *poly;
+    inv_ntt(&mut result);
+    result
 }
 
-pub fn ccakem_decaps(sk: &[u8; SECRET_KEY_BYTES], ct: &[u8; CIPHERTEXT_BYTES]) -> [u8; SHARED_SECRET_BYTES] {
-    let s_offset = K * POLYBYTES;
-    let hpk_offset = s_offset + PUBLIC_KEY_BYTES;
-    let z_offset = hpk_offset + 32;
-
-    let mut pk = [0u8; PUBLIC_KEY_BYTES];
-    pk.copy_from_slice(&sk[s_offset..s_offset + PUBLIC_KEY_BYTES]);
-
-    let mut pk_hash = [0u8; 32];
-    pk_hash.copy_from_slice(&sk[hpk_offset..hpk_offset + 32]);
-
-    let mut z = [0u8; 32];
-    z.copy_from_slice(&sk[z_offset..z_offset + 32]);
-
-    let m_prime = cpapke_dec(sk, ct);
-
-    let mut g_input = [0u8; 64];
-    g_input[..32].copy_from_slice(&m_prime);
-    g_input[32..64].copy_from_slice(&pk_hash);
-    let g_output = sha3_512(&g_input);
-
-    let mut k_bar_prime = [0u8; 32];
-    let mut r_prime = [0u8; 32];
-    k_bar_prime.copy_from_slice(&g_output[..32]);
-    r_prime.copy_from_slice(&g_output[32..64]);
-
-    let ct_prime = cpapke_enc(&pk, &m_prime, &r_prime);
-
-    let c_hash = sha3_256(ct);
-
-    if ct_eq(&ct[..], &ct_prime[..]) {
-        let mut kdf_input = [0u8; 64];
-        kdf_input[..32].copy_from_slice(&k_bar_prime);
-        kdf_input[32..64].copy_from_slice(&c_hash);
-        sha3_256(&kdf_input)
-    } else {
-        let mut kdf_input = [0u8; 64];
-        kdf_input[..32].copy_from_slice(&z);
-        kdf_input[32..64].copy_from_slice(&c_hash);
-        sha3_256(&kdf_input)
+fn cpapke_dec(dk: &[u8], ciphertext: &[u8; CIPHERTEXT_BYTES]) -> [u8; 32] {
+    let mut s = [[0; N]; K];
+    for i in 0..K {
+        s[i] = poly_frombytes(&dk[i * POLYBYTES..(i + 1) * POLYBYTES]);
     }
+    let mut product_sum = [0; N];
+    for i in 0..K {
+        let mut u = poly_decompress(&ciphertext[i * 32 * DU..(i + 1) * 32 * DU], DU);
+        ntt(&mut u);
+        let product = multiply_ntts(&s[i], &u);
+        product_sum = poly_add(&product_sum, &product);
+    }
+    let v = poly_decompress(&ciphertext[K * 32 * DU..], DV);
+    let recovered = poly_sub(&v, &inv_ntt_result(&product_sum));
+    poly_to_msg(&recovered)
+}
+
+fn keygen_internal(d: &[u8; 32], z: &[u8; 32]) -> ([u8; SECRET_KEY_BYTES], [u8; PUBLIC_KEY_BYTES]) {
+    let (ek, pke_dk) = cpapke_keygen(d);
+    let mut dk = [0; SECRET_KEY_BYTES];
+    dk[..PKE_SECRET_KEY_BYTES].copy_from_slice(&pke_dk);
+    dk[PKE_SECRET_KEY_BYTES..PKE_SECRET_KEY_BYTES + PUBLIC_KEY_BYTES].copy_from_slice(&ek);
+    let hash = sha3_256(&ek);
+    let hash_offset = PKE_SECRET_KEY_BYTES + PUBLIC_KEY_BYTES;
+    dk[hash_offset..hash_offset + 32].copy_from_slice(&hash);
+    dk[hash_offset + 32..].copy_from_slice(z);
+    (dk, ek)
+}
+
+fn encaps_internal(
+    ek: &[u8; PUBLIC_KEY_BYTES],
+    msg: &[u8; 32],
+) -> ([u8; CIPHERTEXT_BYTES], [u8; SHARED_SECRET_BYTES]) {
+    let mut g_input = [0; 64];
+    g_input[..32].copy_from_slice(msg);
+    g_input[32..].copy_from_slice(&sha3_256(ek));
+    let expanded = sha3_512(&g_input);
+    let mut shared = [0; 32];
+    let mut randomness = [0; 32];
+    shared.copy_from_slice(&expanded[..32]);
+    randomness.copy_from_slice(&expanded[32..]);
+    (cpapke_enc(ek, msg, &randomness), shared)
+}
+
+fn decaps_internal(
+    dk: &[u8; SECRET_KEY_BYTES],
+    ciphertext: &[u8; CIPHERTEXT_BYTES],
+) -> [u8; SHARED_SECRET_BYTES] {
+    let mut ek = [0; PUBLIC_KEY_BYTES];
+    ek.copy_from_slice(&dk[PKE_SECRET_KEY_BYTES..PKE_SECRET_KEY_BYTES + PUBLIC_KEY_BYTES]);
+    let hash_offset = PKE_SECRET_KEY_BYTES + PUBLIC_KEY_BYTES;
+    let msg = cpapke_dec(&dk[..PKE_SECRET_KEY_BYTES], ciphertext);
+    let mut g_input = [0; 64];
+    g_input[..32].copy_from_slice(&msg);
+    g_input[32..].copy_from_slice(&dk[hash_offset..hash_offset + 32]);
+    let expanded = sha3_512(&g_input);
+    let mut randomness = [0; 32];
+    randomness.copy_from_slice(&expanded[32..]);
+    let candidate = cpapke_enc(&ek, &msg, &randomness);
+
+    let mut fallback_input = [0; 32 + CIPHERTEXT_BYTES];
+    fallback_input[..32].copy_from_slice(&dk[hash_offset + 32..]);
+    fallback_input[32..].copy_from_slice(ciphertext);
+    let fallback = shake256_output(&fallback_input);
+    let equal = crate::util::ct_eq(ciphertext, &candidate);
+    let mut output = [0; 32];
+    crate::util::ct_select(!equal as u8, &fallback, &expanded[..32], &mut output);
+    output
+}
+
+fn shake256_output(input: &[u8]) -> [u8; 32] {
+    let mut output = [0; 32];
+    shake256(input, &mut output);
+    output
+}
+
+pub fn valid_encapsulation_key(ek: &[u8; PUBLIC_KEY_BYTES]) -> bool {
+    let mut encoded = [0; K * POLYBYTES];
+    for i in 0..K {
+        let decoded = poly_frombytes(&ek[i * POLYBYTES..(i + 1) * POLYBYTES]);
+        encoded[i * POLYBYTES..(i + 1) * POLYBYTES].copy_from_slice(&poly_tobytes(&decoded));
+    }
+    crate::util::ct_eq(&encoded, &ek[..K * POLYBYTES])
+}
+
+pub fn valid_decapsulation_key(dk: &[u8; SECRET_KEY_BYTES]) -> bool {
+    let hash_offset = PKE_SECRET_KEY_BYTES + PUBLIC_KEY_BYTES;
+    crate::util::ct_eq(
+        &sha3_256(&dk[PKE_SECRET_KEY_BYTES..hash_offset]),
+        &dk[hash_offset..hash_offset + 32],
+    )
+}
+
+/// Generate a fresh ML-KEM-1024 key pair. The returned tuple is `(dk, ek)`.
+pub fn keygen() -> Result<([u8; SECRET_KEY_BYTES], [u8; PUBLIC_KEY_BYTES]), Error> {
+    let mut d = [0; 32];
+    let mut z = [0; 32];
+    fill_random(&mut d)?;
+    fill_random(&mut z)?;
+    Ok(keygen_internal(&d, &z))
+}
+
+pub fn encaps(
+    ek: &[u8; PUBLIC_KEY_BYTES],
+) -> Result<([u8; CIPHERTEXT_BYTES], [u8; SHARED_SECRET_BYTES]), Error> {
+    if !valid_encapsulation_key(ek) {
+        return Err(Error::InvalidEncapsulationKey);
+    }
+    let mut msg = [0; 32];
+    fill_random(&mut msg)?;
+    Ok(encaps_internal(ek, &msg))
+}
+
+pub fn decaps(
+    dk: &[u8; SECRET_KEY_BYTES],
+    ciphertext: &[u8; CIPHERTEXT_BYTES],
+) -> Result<[u8; SHARED_SECRET_BYTES], Error> {
+    if !valid_decapsulation_key(dk) {
+        return Err(Error::InvalidDecapsulationKey);
+    }
+    Ok(decaps_internal(dk, ciphertext))
+}
+
+#[cfg(any(test, feature = "test-vectors"))]
+pub fn keygen_deterministic(
+    d: &[u8; 32],
+    z: &[u8; 32],
+) -> ([u8; SECRET_KEY_BYTES], [u8; PUBLIC_KEY_BYTES]) {
+    keygen_internal(d, z)
+}
+
+#[cfg(any(test, feature = "test-vectors"))]
+pub fn encaps_deterministic(
+    ek: &[u8; PUBLIC_KEY_BYTES],
+    msg: &[u8; 32],
+) -> ([u8; CIPHERTEXT_BYTES], [u8; SHARED_SECRET_BYTES]) {
+    encaps_internal(ek, msg)
+}
+
+#[cfg(any(test, feature = "test-vectors"))]
+pub fn decaps_deterministic(
+    dk: &[u8; SECRET_KEY_BYTES],
+    ciphertext: &[u8; CIPHERTEXT_BYTES],
+) -> [u8; SHARED_SECRET_BYTES] {
+    decaps_internal(dk, ciphertext)
 }
 
 #[cfg(test)]
@@ -551,119 +586,53 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_keypair_roundtrip() {
-        let (sk, _pk) = ccakem_keygen(None);
-        assert!(sk.len() == SECRET_KEY_BYTES);
+    fn ntt_multiplication_matches_naive_negacyclic_product() {
+        let mut a = [0; N];
+        let mut b = [0; N];
+        for i in 0..N {
+            a[i] = ((i * 7 + 5) % Q as usize) as i32;
+            b[i] = ((i * 13 + 3) % Q as usize) as i32;
+        }
+        let mut a_hat = a;
+        let mut b_hat = b;
+        ntt(&mut a_hat);
+        ntt(&mut b_hat);
+        let actual = inv_ntt_result(&multiply_ntts(&a_hat, &b_hat));
+        for i in 0..N {
+            let mut expected = 0;
+            for j in 0..N {
+                let (index, sign) = if i >= j {
+                    (i - j, 1)
+                } else {
+                    (N + i - j, -1)
+                };
+                expected = add_q(expected, sign * mul_q(a[j], b[index]));
+            }
+            assert_eq!(actual[i], expected, "coefficient {i}");
+        }
     }
 
     #[test]
-    fn test_kyber_1024_kat() {
-        let mut seed = [0u8; 64];
-        for i in 0..64 { seed[i] = i as u8; }
-        let (_sk, _pk) = ccakem_keygen(Some(&seed));
-    }
-
-    #[test]
-    fn test_ccakem_roundtrip() {
-        let (sk, pk) = ccakem_keygen(None);
-        let (ct, ss_enc) = ccakem_encaps(&pk);
-        let ss_dec = ccakem_decaps(&sk, &ct);
-        assert_eq!(ss_enc, ss_dec, "shared secrets must match");
-    }
-
-    #[test]
-    fn test_ccakem_deterministic() {
-        let mut seed = [0u8; 64];
-        for i in 0..64 { seed[i] = i as u8; }
-        let (sk_a, pk_a) = ccakem_keygen(Some(&seed));
-        let (sk_b, pk_b) = ccakem_keygen(Some(&seed));
-        assert_eq!(pk_a, pk_b, "deterministic pk must match");
-        assert_eq!(sk_a, sk_b, "deterministic sk must match");
-    }
-
-    #[test]
-    fn test_msg_encoding_roundtrip() {
-        let msg = [0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0xba, 0xbe,
-                   0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
-                   0xfe, 0xed, 0xbe, 0xef, 0xde, 0xad, 0xf0, 0x0d,
-                   0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77];
-        let poly = msg_to_poly(&msg);
-        let msg2 = poly_to_msg(&poly);
-        assert_eq!(msg, msg2, "message encoding roundtrip must match");
-    }
-
-    #[test]
-    fn test_compress_roundtrip() {
-        let bound = |d: usize| -> i32 {
-            if Q % (1 << (d + 1)) == 0 { Q / (1 << (d + 1)) } else { Q / (1 << (d + 1)) + 1 }
-        };
+    fn compression_is_little_endian_and_bounded() {
         for d in [1, 4, 5, 10, 11] {
-            for x in [0, 1, Q/4, Q/2, 3*Q/4, Q-1, -1, -(Q/2)] {
-                let c = compress(x, d);
-                assert!(c >= 0 && c < (1 << d), "d={} x={} c={}", d, x, c);
-                let y = decompress(c, d);
-                let diff_mod = ((x - y) % Q + Q) % Q;
-                let err = if diff_mod > Q/2 { diff_mod - Q } else { diff_mod };
-                assert!(err.abs() <= bound(d), "d={} x={} y={} err={}", d, x, y, err);
+            for value in [0, 1, Q / 4, Q / 2, 3 * Q / 4, Q - 1, -1, -(Q / 2)] {
+                let compressed = compress(value, d);
+                assert!((0..1 << d).contains(&compressed));
+                let decompressed = decompress(compressed, d);
+                let difference = sub_q(value, decompressed);
+                let centered = if difference > Q / 2 {
+                    difference - Q
+                } else {
+                    difference
+                };
+                assert!(centered.abs() <= Q / (1 << (d + 1)) + 1);
             }
         }
     }
 
     #[test]
-    fn test_cpapke_roundtrip() {
-        let mut seed = [0u8; 64];
-        for i in 0..64 { seed[i] = i as u8; }
-        let (sk, pk) = ccakem_keygen(Some(&seed));
-        let msg = [0x12; 32];
-        let coins = [0x34; 32];
-        let ct = cpapke_enc(&pk, &msg, &coins);
-        let msg2 = cpapke_dec(&sk, &ct);
-        assert_eq!(msg, msg2, "CPAPKE roundtrip must recover message");
-    }
-
-    #[test]
-    fn test_poly_mul_roundtrip() {
-        let mut a = [0i32; N];
-        let mut b = [0i32; N];
-        for i in 0..N {
-            a[i] = ((i * 7 + 5) as i32) % Q;
-            b[i] = ((i * 13 + 3) as i32) % Q;
-        }
-        let ab = poly_mul(&a, &b);
-        let ba = poly_mul(&b, &a);
-        for i in 0..N {
-            if ab[i].rem_euclid(Q) != ba[i].rem_euclid(Q) {
-                panic!("commute: ab[{}]={} != ba[{}]={}", i, ab[i], i, ba[i]);
-            }
-        }
-        let identity = {
-            let mut id = [0i32; N];
-            id[0] = 1;
-            id
-        };
-        let a2 = poly_mul(&identity, &a);
-        for i in 0..N {
-            let diff = (a2[i] - a[i]).rem_euclid(Q);
-            if diff != 0 {
-                panic!("identity: a2[{}]={} != a[{}]={} diff={}", i, a2[i], i, a[i], diff);
-            }
-        }
-    }
-
-    #[test]
-    fn test_polymul_commutes() {
-        let mut a = [0i32; N];
-        let mut b = [0i32; N];
-        for i in 0..N {
-            a[i] = ((i * 7 + 5) as i32) % Q;
-            b[i] = ((i * 13 + 3) as i32) % Q;
-        }
-        let ab = poly_mul(&a, &b);
-        let ba = poly_mul(&b, &a);
-        for i in 0..N {
-            if ab[i] != ba[i] {
-                panic!("ab[{}]={} != ba[{}]={}", i, ab[i], i, ba[i]);
-            }
-        }
+    fn msg_encoding_roundtrip() {
+        let msg = [0xa5; 32];
+        assert_eq!(poly_to_msg(&msg_to_poly(&msg)), msg);
     }
 }

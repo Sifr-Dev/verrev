@@ -1,0 +1,9 @@
+{
+  "name": "verrev",
+  "description": "From-scratch P2P operating system with post-quantum crypto and capability security",
+  "stack": [
+    "cargo"
+  ],
+  "status": "experimental",
+  "primary_language": "Rust"
+}

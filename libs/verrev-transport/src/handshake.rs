@@ -51,7 +51,10 @@ impl Handshake {
     pub fn next_message(&mut self) -> Option<Vec<u8>> {
         match &self.state {
             HandshakeState::ClientHello => {
-                let (kyber_sk, kyber_pk) = kyber::ccakem_keygen(None);
+                let (kyber_sk, kyber_pk) = match kyber::keygen() {
+                    Ok(pair) => pair,
+                    Err(_) => return None,
+                };
                 let sig = self.local_identity.sign(&kyber_pk);
                 
                 let mut msg = Vec::with_capacity(MESSAGE_SIZE);
@@ -94,7 +97,10 @@ impl Handshake {
                 let remote_id = Identity::from_public_key(&remote_dilithium_pk);
                 self.remote_identity = Some(remote_id);
 
-                let (ct, ss) = kyber::ccakem_encaps(&kyber_pk);
+                let (ct, ss) = match kyber::encaps(&kyber_pk) {
+                    Ok(result) => result,
+                    Err(_) => return Ok(None),
+                };
                 
                 let mut to_sign = Vec::with_capacity(kyber::CIPHERTEXT_BYTES + kyber::PUBLIC_KEY_BYTES);
                 to_sign.extend_from_slice(&ct);
@@ -138,7 +144,10 @@ impl Handshake {
                 let remote_id = Identity::from_public_key(&remote_dilithium_pk);
                 self.remote_identity = Some(remote_id);
 
-                let ss = kyber::ccakem_decaps(kyber_sk, &ct);
+                let ss = match kyber::decaps(kyber_sk, &ct) {
+                    Ok(secret) => secret,
+                    Err(_) => return Ok(None),
+                };
 
                 let mut kdf_input = [0u8; 64];
                 kdf_input[..32].copy_from_slice(&ss);

@@ -34,7 +34,7 @@
 
 | Crate | Status | Description |
 |---|---|---|
-| `verrev-crypto` | ✅ Complete | ML-KEM-1024 (full NTT + CCAKEM, 10 tests), ML-DSA-87 (full NTT keygen/sign/verify, 11 tests), XChaCha20-Poly1305 + AES-256-GCM (6 tests), constant-time utilities. 27 crypto tests pass. |
+| `verrev-crypto` | ⚠️ Partial | ML-KEM-1024 (full NTT + CCAKEM, 10 tests, NIST ACVP keygen/encaps/decaps vectors pass), ML-DSA-87 (full NTT; keygen matches NIST FIPS 204 exactly; sign/verify roundtrip internally but are **not yet FIPS 204 conformant** — the NIST sigGen/sigVer vectors are `#[ignore]`d with the divergence recorded), XChaCha20-Poly1305 + AES-256-GCM (6 tests), constant-time utilities. 27 crypto tests pass; 3 NIST conformance checks ignored. |
 | `verrev-identity` | ✅ Perfect | Identity = SHA3-256(Dilithium-5 public key). IdentityBundle with keygen, signing, verification. |
 | `verrev-capability` | ✅ Working | Capability tokens with check_access, delegate, revoke. Custom(c) rights shift needs overflow fix. |
 

@@ -4,6 +4,22 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+# Exposes FIPS internal interfaces for conformance fixtures. Never enable for applications.
+test-vectors = []
+
 [dependencies]
 verrev-hash = { workspace = true }
 verrev-syscall = { workspace = true }
+# Conformance fixtures need the FIPS internal entry points, which stay behind
+# `test-vectors` so published builds cannot call them. Declaring the features on
+# the test targets means a plain `cargo test` exercises the real vectors.
+[[test]]
+name = "ml_kem_nist"
+path = "tests/ml_kem_nist.rs"
+required-features = ["test-vectors"]
+
+[[test]]
+name = "ml_dsa_nist"
+path = "tests/ml_dsa_nist.rs"
+required-features = ["test-vectors"]

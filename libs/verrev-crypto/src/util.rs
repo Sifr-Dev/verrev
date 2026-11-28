@@ -25,12 +25,26 @@ pub fn ct_swap(bit: u8, a: &mut [u8], b: &mut [u8]) {
     }
 }
 
-pub fn fill_random(buf: &mut [u8]) {
-    let _ = verrev_syscall::linux::getrandom(buf);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RandomnessError;
+
+/// Fill the complete buffer from the kernel CSPRNG, retrying interrupted calls.
+/// Failure is explicit: no partially filled or all-zero key material is returned.
+pub fn fill_random(buf: &mut [u8]) -> Result<(), RandomnessError> {
+    let mut offset = 0;
+    while offset < buf.len() {
+        match verrev_syscall::linux::getrandom(&mut buf[offset..]) {
+            Ok(0) => return Err(RandomnessError),
+            Ok(count) => offset += count,
+            Err(error) if error.kind() == verrev_syscall::types::ErrnoKind::Interrupted => {}
+            Err(_) => return Err(RandomnessError),
+        }
+    }
+    Ok(())
 }
 
-pub fn random_u64() -> u64 {
+pub fn random_u64() -> Result<u64, RandomnessError> {
     let mut buf = [0u8; 8];
-    fill_random(&mut buf);
-    u64::from_le_bytes(buf)
+    fill_random(&mut buf)?;
+    Ok(u64::from_le_bytes(buf))
 }

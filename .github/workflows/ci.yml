@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "stable"
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --workspace --locked
+      # Single-threaded: several crypto tests are timing/state sensitive by design.
+      - run: cargo test --workspace --locked -- --test-threads=1

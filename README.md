@@ -1,181 +1,182 @@
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset=".github/banner-dark.svg">
-    <img alt="verrev — built from zero" src=".github/banner-light.svg" width="100%">
-  </picture>
+# Aether
+
+A from-scratch post-quantum peer-to-peer operating system in `no_std` Rust — an early prototype.
+
+<p>
+  <a href="https://github.com/Sifr-Dev/Aether/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Sifr-Dev/Aether/actions/workflows/ci.yml/badge.svg"></a>
+  <img alt="Rust stable" src="https://img.shields.io/badge/RUST-STABLE-dea584?logo=rust&logoColor=white">
+  <img alt="Tests: 64 passing" src="https://img.shields.io/badge/TESTS-64_PASSING-39c5cf">
+  <img alt="License: MIT" src="https://img.shields.io/badge/LICENSE-MIT-2ea043">
 </p>
 
-# Verrev
+> Crate names remain `verrev-*`; the GitHub repository and product name are
+> Aether (`https://github.com/Sifr-Dev/Aether`).
 
-> An in-development peer-to-peer operating system written from scratch in Rust:
-> post-quantum crypto (ML-KEM-1024 / ML-DSA-87), capability security, CRDTs,
-> content-addressed storage. The same crates compile on Linux today; a
-> Verrev-microkernel target is the long-term plan.
->
-> **This is a prototype in an early phase, not a working system.** No network
-> transport exists yet (`verrev-transport` is a shell), the store does not
-> return objects, and the apps under `apps/` are stubs. What works today is
-> documented and verified below — nothing beyond it is claimed.
+## What it is
 
----
+Aether is a vertically integrated P2P system: post-quantum cryptography
+(ML-KEM-1024, ML-DSA-87), capability security, content-addressed storage, CRDTs
+and a UDP transport, all written without external crates. Every library is
+`#![no_std]` with `extern crate alloc`; the same crates build on Linux today, and
+a dedicated microkernel target is the long-term direction.
 
-## Current State
+This is a prototype in an early phase, not a working distributed OS. The UDP
+handshake, hashes, AEAD, capability checks, Merkle tree and erasure coding are
+implemented and tested. DHT routing RPCs, mesh route discovery, distributed
+storage, WASM execution, the UI and all applications are incomplete or stubs.
 
-`cargo build --workspace` — exit 0 (warnings: unused deps `verrev-db`, `verrev-net`, unused imports/variables in stub crates). `cargo test --workspace` — **48 tests pass** across 7 crates (hash KAT + crypto suites + identity + capability + diststore + relay + fs). The commit message said "60 tests" and elsewhere "31 tests" — the measured number is 48; treat any higher figure as stale.
+## Current capabilities
 
-### Layer 0 — Foundation
+- **SHA-3 / SHAKE** — Keccak-f[1600] with SHA3-256/512 and SHAKE128/256;
+  round constants and rho offsets generated from formulas. `libs/verrev-hash/src/sha3.rs`;
+  5 tests including NIST empty-string vectors (`cargo test --workspace`).
+- **ML-KEM-1024** — full NTT, CPAPKE and CCAKEM in
+  `libs/verrev-crypto/src/kyber.rs`; 3 unit tests plus 4 official NIST ACVP
+  keygen/encaps/decaps vectors:
+  `cargo test -p verrev-crypto --features test-vectors`.
+- **ML-DSA-87** — full NTT and key generation in
+  `libs/verrev-crypto/src/dilithium.rs`; key generation matches FIPS 204 and
+  passes its official vector. Sign/verify round-trip internally but are **not
+  yet FIPS 204 conformant**; the 3 official sign/verify checks are `#[ignore]`d
+  with the divergence recorded rather than weakened.
+- **AEAD** — XChaCha20-Poly1305 and AES-256-GCM with RFC 8439, NIST GCM and
+  independent OpenSSL-derived vectors; 12 tests in
+  `libs/verrev-crypto/src/aead.rs`.
+- **Identity and capabilities** — identity = SHA3-256(ML-DSA public key)
+  (`libs/verrev-identity`); capability rights, delegation and revocation with
+  tested non-escalation (`libs/verrev-capability`, 4 tests).
+- **Content-addressed store** — `libs/verrev-store/src/lib.rs`; `get` verifies
+  the hash and declared size before returning data, with 5 tests covering
+  missing, truncated and corrupted blocks.
+- **UDP transport handshake** — `libs/verrev-transport`; a real two-party
+  Kyber + Dilithium handshake over loopback UDP reaches `Established`
+  (`test_endpoint_handshake_over_udp`), with packet framing and an
+  XChaCha20-Poly1305 encrypted channel.
+- **DHT routing table** — `libs/verrev-p2p/src/dht.rs`; 256 buckets, XOR
+  distance, `find_closest`; 6 tests. Peer discovery RPCs are not implemented.
+- **Onion packet build/peel** — `libs/verrev-mesh/src/onion.rs`; one real test.
+  Route discovery, circuit key exchange and multi-hop forwarding are not.
+- **CRDT text and Merkle trees** — `libs/verrev-sync`; text insert/delete
+  (1 test) and Merkle root/diff over dynamic leaves (9 tests).
+- **Erasure coding** — `libs/verrev-diststore/src/erasure.rs`; encode/decode
+  round-trip test. The distributed store itself returns explicit errors, and
+  no peer placement exists.
+- **Local database** — `libs/verrev-db`; BTreeMap-backed KV, queue and document
+  stores.
+- **Deterministic build** — release profile uses fat LTO, one codegen unit and
+  `panic = "abort"`; all crypto tables are generated from formulas.
 
-| Crate | Status | Description |
-|---|---|---|
-| `verrev-syscall` | ✅ Complete | Raw Linux syscall shim (getrandom, socket, sendto, recvfrom, mmap). Replaced by direct kernel calls in Phase 4. |
-| `verrev-hash` | ✅ Perfect | SHA-3 (Keccak-f[1600]) with SHA3-256, SHA3-512, SHAKE128, SHAKE256. KAT-verified. All constants formula-generated (RC from LFSR, RHO from (t(t+1)/2 mod 64)). |
-
-### Layer 1 — Core Primitives
-
-| Crate | Status | Description |
-|---|---|---|
-| `verrev-crypto` | ⚠️ Partial | ML-KEM-1024 (full NTT + CCAKEM, 10 tests, NIST ACVP keygen/encaps/decaps vectors pass), ML-DSA-87 (full NTT; keygen matches NIST FIPS 204 exactly; sign/verify roundtrip internally but are **not yet FIPS 204 conformant** — the NIST sigGen/sigVer vectors are `#[ignore]`d with the divergence recorded), XChaCha20-Poly1305 + AES-256-GCM (6 tests), constant-time utilities. 27 crypto tests pass; 3 NIST conformance checks ignored. |
-| `verrev-identity` | ✅ Perfect | Identity = SHA3-256(Dilithium-5 public key). IdentityBundle with keygen, signing, verification. |
-| `verrev-capability` | ✅ Working | Capability tokens with check_access, delegate, revoke. Custom(c) rights shift needs overflow fix. |
-
-### Layer 2 — Local Storage
-
-| Crate | Status | Description |
-|---|---|---|
-| `verrev-store` | ✅ Working | ContentStore with block storage. put computes hash, get returns None (stub). In-memory BTreeMap. |
-| `verrev-fs` | ⚠️ Minor | Directory with lookup/add_entry. No duplicate detection, no tests. |
-
-### Layer 3 — Transport
-
-| Crate | Status | Description |
-|---|---|---|
-| `verrev-transport` | ❌ Shell | Connection, PeerAddr, StreamState defined. Handshake/stream modules are stubs with no real I/O. |
-| `verrev-relay` | ⚠️ Partial | StoreAndForward works (store/retrieve). No duplicate checking, no expiry enforcement. |
-
-### Layer 4 — Mesh Network
-
-| Crate | Status | Description |
-|---|---|---|
-| `verrev-p2p` | ❌ Shell | RoutingTable with 256 buckets, KBucket insert/find_closest, xor_distance tested. find_closest returns empty Vec. No bucket splitting. Discovery/NAT are stubs. |
-| `verrev-mesh` | ❌ Shell | MeshNode, RoutingTable, Circuit, OnionMessage types. Route discovery/forwarding are stubs. |
-| `verrev-name` | ❌ Shell | NameRecord, NameResolver types. Resolution returns Err. |
-
-### Layer 5 — State & Replication
-
-| Crate | Status | Description |
-|---|---|---|
-| `verrev-sync` | ❌ Shell | CRDT types (TextCrdt, OpId, CrdtValue). insert/delete are no-ops. Merkle tree has no root_hash. reconcile stub. |
-| `verrev-diststore` | ❌ Shell | DistributedStore and erasure/repair return errors. StoragePolicy works. |
-
-### Layer 6 — Compute
-
-| Crate | Status | Description |
-|---|---|---|
-| `verrev-runtime` | ❌ Shell | WasmModule compile/instantiate succeed vacuously. Instance::call returns empty Vec. Unsound &'static mut. |
-| `verrev-compute` | ❌ Shell | Job, ComputeNode types. CreditLedger working (O(n) spent-set). Scheduler/verification stubs. |
-| `verrev-db` | ✅ Working | KvStore, MessageQueue, DocumentStore with BTreeMap/VecDeque backing. Database create_collection works. |
-
-### Layer 7 — Interface
-
-| Crate | Status | Description |
-|---|---|---|
-| `verrev-ui` | ❌ Shell | Point, Rect, SceneNode, Button, TextInput types. Compositor/Font are stubs. |
-
-### Test Infrastructure
-
-| Crate | Status | Description |
-|---|---|---|
-| `verrev-net` | ⚠️ Working | NetworkSimulation with send/latency/stats. ChaosConfig. Loss model is approximate (not proper Bernoulli trial). |
-
-### Applications
-
-All 9 apps are `println` stubs awaiting library completion.
-
----
-
-## Recently Fixed Violations
-
-Per Rule 18 (violations are blockers) and Rule 19 (absolute perfection):
-
-| Issue | Fix | Date |
-|---|---|---|
-| **Hardcoded Dilithium zeta table** (256 entries) | Generated from formula: zetas[i] = R·ζ^(2·br7(i)) for i=1..127, R·ζ^(2·br7(i-128)+1) for i=128..255. invntt_factor = R²·256⁻¹ mod Q = 41978. All verified against pq-crystals reference. | 2026-07-26 |
-| **heappless external dependency** | Removed from all Cargo.toml. Replaced all heapless::Vec with alloc::vec::Vec. | earlier |
-| **Kyber fake encaps/decaps** | Replaced SHA-3 CTR approach with proper ccakem_encaps/ccakem_decaps forwarders. | earlier |
-| **Dilithium fake sign/verify** | Full ML-DSA-87 with NTT-based polynomials. Fixed %5 bug in uniform_eta. | earlier |
-| **AEAD SHA-3 substitutes** | Replaced with proper XChaCha20-Poly1305 + AES-256-GCM. S-box from GF(2⁸) formula. | earlier |
-| **SHA-3 RC/RHO hardcoded tables** | RC from LFSR formula, RHO from (t(t+1)/2) mod 64 formula. | earlier |
-| **QINV hardcoded** | Computed via Newton's method Q⁻¹ mod 2³². | earlier |
-
----
-
-## Build
+## Quick start
 
 ```sh
-# Full workspace
-cargo build
-
-# Specific crate
-cargo build -p verrev-crypto
-
-# Tests (thread-safe mode for Kyber RNG)
-cargo test -- --test-threads=1
+git clone https://github.com/Sifr-Dev/Aether.git
+cd verrev
+cargo build --workspace --locked
+cargo test --workspace --locked -- --test-threads=1
 ```
 
-Requires Rust 1.96.0+ (stable). Edition 2024.
+Requirements: stable Rust (Edition 2024; CI uses `stable`). The tests are run
+single-threaded because several crypto tests are intentionally state-sensitive.
 
----
+Official conformance fixtures are behind a feature so published builds cannot
+call the internal FIPS entry points:
+
+```sh
+cargo test -p verrev-crypto --locked --features test-vectors -- --test-threads=1
+```
+
+## Verification
+
+Run on this host (Ryzen 7 7435HS, Linux, Rust 1.100.0):
+
+```sh
+cargo build --workspace --locked
+cargo test --workspace --locked -- --test-threads=1
+cargo test -p verrev-crypto --locked --features test-vectors -- --test-threads=1
+```
+
+Observed:
+
+- `cargo build --workspace --locked` exits 0 (4 manifest warnings about unused
+  workspace dependencies; no errors).
+- `cargo test --workspace --locked` → **64 passed, 0 failed, 0 ignored**:
+  crypto 27, sync 10, p2p 6, hash 5, store 5, capability 4, runtime 4,
+  diststore 1, mesh 1, transport 1.
+- `cargo test -p verrev-crypto --features test-vectors` → 27 unit + 2 ML-DSA
+  checks (1 official key-generation vector and 1 internal round-trip) + 4
+  ML-KEM vectors passed, **3 ML-DSA sign/verify checks ignored** for the
+  recorded non-conformance.
+
+No benchmark suite exists, so no performance claims are made.
 
 ## Architecture
 
-All crates are `#![no_std]` with `extern crate alloc`. The dependency chain is strict bottom-up:
-
 ```
-verrev-syscall  verrev-hash
-  └── verrev-crypto
-       └── verrev-identity
-            └── verrev-capability
-                 ├── verrev-store → verrev-fs
-                 └── verrev-transport → verrev-p2p → verrev-relay → verrev-mesh
-                      ├── verrev-name
-                      ├── verrev-sync → verrev-diststore
-                      └── verrev-runtime → verrev-compute → verrev-db
-                           └── verrev-ui → apps
+libs/verrev-syscall   raw Linux syscall shim (getrandom, sockets, mmap)
+libs/verrev-hash      SHA-3 / SHAKE
+libs/verrev-crypto    ML-KEM-1024, ML-DSA-87, XChaCha20-Poly1305, AES-256-GCM
+libs/verrev-identity  identity and signing
+libs/verrev-capability rights, delegation, revocation
+libs/verrev-store     content-addressed block store
+libs/verrev-fs        directory map
+libs/verrev-transport UDP endpoint, handshake, packets, encrypted channel
+libs/verrev-relay     store-and-forward relay
+libs/verrev-p2p       DHT routing table and node
+libs/verrev-mesh      onion packets, routing table, circuit types
+libs/verrev-name      in-memory name records
+libs/verrev-sync      text CRDT, Merkle tree, sync protocol
+libs/verrev-diststore erasure coding and distributed-store interface
+libs/verrev-runtime   WASM module parsing (execution unsupported)
+libs/verrev-compute   jobs, credit ledger, scheduler interface
+libs/verrev-db        KV, queue and document stores
+libs/verrev-ui        scene/widget types and compositor interface
+libs/verrev-net       network simulation for tests
+apps/                 nine application crates, currently stubs
 ```
 
-No circular dependencies. Each layer depends only on layers below it.
+The dependency chain is strictly bottom-up; no circular dependencies.
 
----
+## Design decisions
 
-## Key Design Decisions
+- **Post-quantum only:** ML-KEM-1024 for KEM, ML-DSA-87 for signatures. No RSA,
+  ECDSA, X25519 or hybrid fallback.
+- **SHA-3 at layer 0:** content and identities are addressed by hash.
+- **No external crates:** everything is owned code, `no_std` + `alloc`.
+- **Constant-time comparisons:** security comparisons use `util::ct_eq`.
+- **Deterministic release builds:** fat LTO, one codegen unit, abort on panic.
 
-- **Post-quantum only:** Kyber-1024 (ML-KEM-1024) for KEM, Dilithium-5 (ML-DSA-87) for signatures. No RSA, ECDSA, X25519, or hybrid fallback anywhere.
-- **Pure PQ handshake:** 2-RTT with pure Kyber + Dilithium. No X25519 hybrid.
-- **SHA-3 is Layer 0** (not inside verrev-crypto). Everything addressed by hash.
-- **AEAD uses fixed stack buffers:** No Vec in hot paths. Caller-provided output slices.
-- **panic = "abort" in release:** No unwind tables in production binaries.
-- **Deterministic builds:** Release profile has lto = "fat", codegen-units = 1.
-- **Rule 19 (Absolute Perfection):** No "good enough." Every function must be the absolute best implementation possible. Perfection is the standard.
+## Limitations
 
----
+- **ML-DSA sign/verify do not yet conform to FIPS 204.** Internal round-trips
+  pass; the official sigGen/sigVer vectors are ignored, and importing an official
+  signature does not verify. Do not use this for signature security claims.
+- **No real mesh:** DHT lookup over the network, route discovery, NAT traversal,
+  multi-hop circuits and onion route keys are stubs. `route_message` uses a
+  single hop with a zero key.
+- **Transport is local-only in evidence:** the handshake test runs over loopback
+  UDP. No internet, NAT or lossy-network validation exists.
+- **No persistence:** the content store and database are in memory; the store's
+  `put`/`get` are verified but do not survive process exit.
+- **Distributed storage is not implemented:** `put`, `get` and `repair` return
+  explicit errors; only erasure encode/decode is real.
+- **No WASM execution:** the runtime parses a module header and returns
+  `UnsupportedExecution` for compile/instantiate/call.
+- **No UI and no applications:** the compositor, font and text layout are stubs;
+  all nine `apps/` binaries print a placeholder line.
+- **Relay:** store-and-forward works in memory; duplicate detection, TTL
+  enforcement and persistence are absent.
 
-## Priority Fix Queue
+## Roadmap (NOT IMPLEMENTED)
 
-1. Fix AEAD violations: Poly1305 carry propagation, unwrap() calls, Vec→stack, sbox caching, GHASH window table, ct_eq tag comparison
-2. Clean all compiler warnings (8 remaining: dead code + unused variables)
-3. Remove `#![allow(dead_code)]` from verrev-syscall, implement read/write/open wrappers
-4. Fix verrev-runtime unsound &'static mut
-5. Fix verrev-capability shift overflow
-6. Implement real transport handshake (pure PQ 2-RTT)
-7. Build working Kademlia find_closest, Merkle tree root_hash/diff
-8. End-to-end encrypted messaging
+- FIPS 204 conformant ML-DSA-87 signing and verification, with the official
+  vectors enabled.
+- Network DHT RPCs, bucket refresh and peer discovery.
+- Mesh route discovery, circuit key exchange and multi-hop onion forwarding.
+- Persistent content storage and a working distributed store with repair.
+- A WASM runtime with real execution.
+- UI compositor and the application crates.
+- End-to-end encrypted messaging across the mesh.
 
-## verified (2026-11-17, this machine)
+## License
 
-- `cargo build --workspace` → exit 0 (warnings: unused workspace deps; no errors)
-- `cargo test --workspace` → **48 passed** (0 failed). Breakdown: verrev-crypto 27, verrev-hash 6+2, verrev-identity 10, verrev-capability 1, verrev-diststore 1, verrev-fs 1, doc-tests 0
-- `rust-toolchain.toml` pins `nightly-2026-07-01` with `rust-src`, `rustfmt`, `clippy`, `llvm-tools`
-
-## license
-
-`MIT` — see `LICENSE`. built from zero.
+MIT — see `LICENSE`.

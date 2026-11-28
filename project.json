@@ -1,9 +1,15 @@
 {
-  "name": "verrev",
-  "description": "From-scratch P2P operating system with post-quantum crypto and capability security",
+  "name": "Aether",
+  "displayName": "Aether",
+  "former_name": "verrev",
+  "description": "From-scratch post-quantum P2P operating system with capability security, CRDTs and a UDP transport",
+  "summary": "no_std Rust prototype: ML-KEM-1024/ML-DSA-87, SHA-3, AEAD, capabilities, content-addressed store, DHT and UDP handshake; mesh, distributed storage and apps remain incomplete.",
   "stack": [
     "cargo"
   ],
   "status": "experimental",
-  "primary_language": "Rust"
+  "primary_language": "Rust",
+  "license": "MIT",
+  "test_count": 64,
+  "repository": "https://github.com/Sifr-Dev/Aether"
 }
